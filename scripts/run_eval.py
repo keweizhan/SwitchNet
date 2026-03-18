@@ -1,5 +1,5 @@
 """
-run_eval.py ¡ª One-shot evaluation driver: manifest ¡ú transcription ¡ú metrics.
+run_eval.py Â¡Âª One-shot evaluation driver: manifest Â¡Ãº transcription Â¡Ãº metrics.
 
 This is the command-line entry point that ties together transcribe + evaluate.
 Useful for running experiments without opening a notebook.

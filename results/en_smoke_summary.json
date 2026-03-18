@@ -1,0 +1,127 @@
+{
+  "overall": {
+    "wer": 0.0595,
+    "mer": 0.0592,
+    "n_utterances": 10
+  },
+  "per_language": {
+    "en": {
+      "wer": 0.0595,
+      "mer": 0.0592,
+      "n": 10
+    }
+  },
+  "per_entry": [
+    {
+      "wer": 0.0357,
+      "mer": 0.0357,
+      "substitutions": 1,
+      "deletions": 0,
+      "insertions": 0,
+      "ref_words": 28,
+      "hyp_words": 28,
+      "id": "ls_1089-134686-0000",
+      "language": "en"
+    },
+    {
+      "wer": 0.375,
+      "mer": 0.375,
+      "substitutions": 2,
+      "deletions": 1,
+      "insertions": 0,
+      "ref_words": 8,
+      "hyp_words": 7,
+      "id": "ls_1089-134686-0001",
+      "language": "en"
+    },
+    {
+      "wer": 0.0,
+      "mer": 0.0,
+      "substitutions": 0,
+      "deletions": 0,
+      "insertions": 0,
+      "ref_words": 18,
+      "hyp_words": 18,
+      "id": "ls_1089-134686-0002",
+      "language": "en"
+    },
+    {
+      "wer": 0.0,
+      "mer": 0.0,
+      "substitutions": 0,
+      "deletions": 0,
+      "insertions": 0,
+      "ref_words": 7,
+      "hyp_words": 7,
+      "id": "ls_1089-134686-0003",
+      "language": "en"
+    },
+    {
+      "wer": 0.0909,
+      "mer": 0.0909,
+      "substitutions": 1,
+      "deletions": 0,
+      "insertions": 0,
+      "ref_words": 11,
+      "hyp_words": 11,
+      "id": "ls_1089-134686-0004",
+      "language": "en"
+    },
+    {
+      "wer": 0.0,
+      "mer": 0.0,
+      "substitutions": 0,
+      "deletions": 0,
+      "insertions": 0,
+      "ref_words": 22,
+      "hyp_words": 22,
+      "id": "ls_1089-134686-0005",
+      "language": "en"
+    },
+    {
+      "wer": 0.125,
+      "mer": 0.12,
+      "substitutions": 2,
+      "deletions": 0,
+      "insertions": 1,
+      "ref_words": 24,
+      "hyp_words": 25,
+      "id": "ls_1089-134686-0006",
+      "language": "en"
+    },
+    {
+      "wer": 0.0,
+      "mer": 0.0,
+      "substitutions": 0,
+      "deletions": 0,
+      "insertions": 0,
+      "ref_words": 8,
+      "hyp_words": 8,
+      "id": "ls_1089-134686-0007",
+      "language": "en"
+    },
+    {
+      "wer": 0.0667,
+      "mer": 0.0667,
+      "substitutions": 1,
+      "deletions": 0,
+      "insertions": 0,
+      "ref_words": 15,
+      "hyp_words": 15,
+      "id": "ls_1089-134686-0008",
+      "language": "en"
+    },
+    {
+      "wer": 0.037,
+      "mer": 0.037,
+      "substitutions": 1,
+      "deletions": 0,
+      "insertions": 0,
+      "ref_words": 27,
+      "hyp_words": 27,
+      "id": "ls_1089-134686-0009",
+      "language": "en"
+    }
+  ],
+  "switch_point": null
+}

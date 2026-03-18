@@ -1,5 +1,5 @@
 """
-build_manifests.py ¡ª Build SwitchNet JSONL manifests from raw datasets.
+build_manifests.py Â¡Âª Build SwitchNet JSONL manifests from raw datasets.
 
 Supported sources:
   - Mozilla Common Voice (Spanish): cv-corpus-*/es/
@@ -26,8 +26,12 @@ import argparse
 import csv
 import json
 import random
+import sys
 from pathlib import Path
 from typing import List, Optional
+
+# Ensure project root is on the path when running as a script
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from src.data.manifest import ManifestEntry, save_manifest
 
@@ -48,8 +52,8 @@ def build_common_voice_manifest(
 
     Expected structure:
         cv_root/
-          {split}.tsv        ¡û metadata
-          clips/             ¡û audio files (.mp3)
+          {split}.tsv        Â¡Ã» metadata
+          clips/             Â¡Ã» audio files (.mp3)
 
     Common Voice audio is MP3. Whisper can handle MP3 directly.
     """
@@ -181,7 +185,7 @@ def build_bilingual_concat_manifest(
     each segment file independently and merge the transcripts.
 
     Each bilingual entry uses a special audio_path format:
-      "__multi__"   (sentinel ¡ª real paths are in the segments)
+      "__multi__"   (sentinel Â¡Âª real paths are in the segments)
 
     The transcriber handles this via segment-level dispatch.
     """
@@ -199,14 +203,14 @@ def build_bilingual_concat_manifest(
 
     bilingual_entries = []
     for i, (en_e, es_e) in enumerate(pairs):
-        # Alternate which language comes first (EN¡úES or ES¡úEN)
+        # Alternate which language comes first (ENÂ¡ÃºES or ESÂ¡ÃºEN)
         if i % 2 == 0:
             first, second = en_e, es_e
         else:
             first, second = es_e, en_e
 
         # Build a pseudo-segment list using separate audio files
-        # We use duration offsets: first=0¡údur_first, second=dur_first¡úend
+        # We use duration offsets: first=0Â¡Ãºdur_first, second=dur_firstÂ¡Ãºend
         # Since we don't always have durations, use placeholder 0.0/1.0
         dur_first = first.duration_s or 0.0
 
@@ -250,7 +254,7 @@ def build_bilingual_concat_manifest(
             d["segments"] = segs
             f.write(json.dumps(d, ensure_ascii=False) + "\n")
 
-    print(f"Built {len(bilingual_entries)} bilingual entries ¡ú {output_path}")
+    print(f"Built {len(bilingual_entries)} bilingual entries Â¡Ãº {output_path}")
     return [e for e, _ in bilingual_entries]
 
 
@@ -269,7 +273,7 @@ def populate_durations(
     try:
         import librosa
     except ImportError:
-        print("librosa not installed ¡ª skipping duration population.")
+        print("librosa not installed Â¡Âª skipping duration population.")
         return
 
     from src.data.manifest import load_manifest, save_manifest
@@ -287,7 +291,7 @@ def populate_durations(
 
     out = output_path or manifest_path
     save_manifest(entries, out)
-    print(f"Durations populated ¡ú {out}")
+    print(f"Durations populated Â¡Ãº {out}")
 
 
 # ---------------------------------------------------------------------------
