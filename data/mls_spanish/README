@@ -1,0 +1,67 @@
+INTRODUCTION
+============
+Multilingual LibriSpeech (MLS) dataset is a large multilingual corpus 
+suitable for speech research. The dataset is derived from read audiobooks 
+from LibriVox and consists of 8 languages - English, German, Dutch, French, 
+Spanish, Italian, Portuguese and Polish. 
+
+This consists of a copy of the original MLS dataset which includes compressed 
+audio in OPUS format in place of the FLAC files present in the original dataset. 
+
+STATISTICS
+==========
+------------------------------------------------
+Language   |  train(hrs) | dev(hrs) | test(hrs)
+------------------------------------------------
+English	   |  44659.74   |  15.75   |  15.55
+German	   |   1966.51	 |  14.28   |  14.29
+Dutch	   |   1554.24	 |  12.76   |  12.76
+French	   |   1076.58	 |  10.07   |  10.07
+Spanish	   |    917.68	 |   9.99   |  10.00
+Italian	   |    247.38	 |   5.18   |   5.27
+Portuguese |	160.96	 |   3.64   |   3.74
+Polish	   |    103.65	 |   2.08   |   2.14
+------------------------------------------------
+
+
+DIRECTORY STRUCTURE
+===================
+
+A typical top-level directory layout
+
+.
+├── metainfo.txt                                # Info about the LibriVox data used in the dataset (one row per chapter)
+├── dev                                         # Dev (validation) subset
+│   ├── segments.txt
+│   ├── transcripts.txt
+│   └── audio
+│       └── ...
+├── test                                        # Test subset
+│   ├── segments.txt
+│   ├── transcripts.txt
+│   └── audio
+│       └── ...
+├── train                                    	# Train subset 
+│   ├── segments.txt                            # LibriVox audio links and segment start/end timestamps (in sec) for each audio file
+│   ├── transcripts.txt                         # Transcripts file with audio file name as key
+│   ├── audio 
+│   │   ├── 10148   	 			# LibriVox speaker ID
+│   │   │   ├── 10119 				# LibriVox book ID
+│   │   │   │   ├── 10148_10119_000000.opus	# 16Khz audio file in Opus format
+│   │   │   │   ├── 10148_10119_000001.opus
+│   │   │   │   └── ...
+│   │   │   └── ...       
+│   │   └── ...
+│   └── limited_supervision			# Limited supervision training sets (10 min, 1 hr and 10 hr)
+│       ├── 1hr                               	# Data of the 1h split (made up of 6 folds of 10 min)
+│       │   ├── 0				# first 10 min fold
+│       │   │   └── handles.txt			# List of audio handles for the split	
+│       │   ├── ...		
+│       │   └── 6                               # last 10 min fold
+│       │       └── handles.txt                 
+│       └── 9hr					# Remaining data of the 10h split (10h=1h+9h)
+│           └── handles.txt
+├── LICENSE				        # License info
+└── README
+
+For more information, see the paper "MLS: A Large-Scale Multilingual Dataset for Speech Research", Vineel Pratap, Qiantong Xu, Anuroop Sriram, Gabriel Synnaeve and Ronan Collobert, INTERSPEECH 2020.

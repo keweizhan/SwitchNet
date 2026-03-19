@@ -88,7 +88,7 @@ def load_manifest(path: str | Path) -> List[ManifestEntry]:
     if not path.exists():
         raise FileNotFoundError(f"Manifest not found: {path}")
     entries = []
-    with open(path) as f:
+    with open(path, encoding="utf-8") as f:
         for lineno, line in enumerate(f, 1):
             line = line.strip()
             if not line:
@@ -104,7 +104,7 @@ def save_manifest(entries: List[ManifestEntry], path: str | Path) -> None:
     """Write a list of ManifestEntry objects to a JSONL file."""
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
-    with open(path, "w") as f:
+    with open(path, "w", encoding="utf-8") as f:
         for entry in entries:
             f.write(json.dumps(entry.to_dict(), ensure_ascii=False) + "\n")
     print(f"Saved {len(entries)} entries to {path}")

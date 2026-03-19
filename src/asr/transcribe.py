@@ -180,7 +180,7 @@ class Transcriber:
         if output_path:
             output_path = Path(output_path)
             output_path.parent.mkdir(parents=True, exist_ok=True)
-            with open(output_path, "w") as f:
+            with open(output_path, "w", encoding="utf-8") as f:
                 for r in results:
                     f.write(json.dumps(r, ensure_ascii=False) + "\n")
             print(f"\nResults written to {output_path}")

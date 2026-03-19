@@ -87,7 +87,7 @@ def evaluate_results(
 
     # Load transcription results
     results = []
-    with open(results_path) as f:
+    with open(results_path, encoding="utf-8") as f:
         for line in f:
             if line.strip():
                 results.append(json.loads(line))
@@ -173,7 +173,7 @@ def evaluate_results(
     if output_path:
         output_path = Path(output_path)
         output_path.parent.mkdir(parents=True, exist_ok=True)
-        with open(output_path, "w") as f:
+        with open(output_path, "w", encoding="utf-8") as f:
             json.dump(summary, f, indent=2, ensure_ascii=False)
         print(f"Evaluation summary written to {output_path}")
 

@@ -1,23 +1,24 @@
 """
-build_manifests.py ¡ª Build SwitchNet JSONL manifests from raw datasets.
+build_manifests.py — Build SwitchNet JSONL manifests from raw datasets.
 
 Supported sources:
   - Mozilla Common Voice (Spanish): cv-corpus-*/es/
   - LibriSpeech (English, for reference): LibriSpeech/test-clean/
+  - MLS (Multilingual LibriSpeech, Spanish): mls_spanish/
   - Bilingual concat: given an EN manifest + ES manifest, interleave segments.
 
 Usage examples:
-  # Build Spanish manifest from Common Voice
-  python scripts/build_manifests.py cv \
-      --cv-root  /data/cv-corpus-17.0/es \
+  # Build Spanish manifest from MLS
+  python scripts/build_manifests.py mls \
+      --mls-root data/mls_spanish \
       --split    test \
-      --output   data/manifests/es_common_voice_test.jsonl \
+      --output   data/manifests/es_mls_test.jsonl \
       --max      200
 
   # Build bilingual manifest by concatenating EN + ES utterances
   python scripts/build_manifests.py bilingual \
       --en-manifest data/manifests/en_librispeech_test.jsonl \
-      --es-manifest data/manifests/es_common_voice_test.jsonl \
+      --es-manifest data/manifests/es_mls_test.jsonl \
       --output      data/manifests/bilingual_concat.jsonl \
       --pairs       100
 """
@@ -160,6 +161,75 @@ def build_librispeech_manifest(
         entries = entries[:max_entries]
 
     print(f"Built {len(entries)} entries from {ls_root}")
+    save_manifest(entries, output_path)
+    return entries
+
+
+# ---------------------------------------------------------------------------
+# MLS (Multilingual LibriSpeech) Spanish builder
+# ---------------------------------------------------------------------------
+
+def build_mls_manifest(
+    mls_root: str | Path,
+    split: str = "test",
+    output_path: str | Path = "data/manifests/es_mls_test.jsonl",
+    max_entries: Optional[int] = None,
+) -> List[ManifestEntry]:
+    """
+    Build a manifest from MLS (Multilingual LibriSpeech) Spanish data.
+
+    Expected structure:
+        mls_root/
+          {split}/
+            transcripts.txt        <- tab-separated: id \\t transcript
+            audio/
+              {speaker}/
+                {chapter}/
+                  {speaker}_{chapter}_{utt}.opus
+    """
+    mls_root = Path(mls_root)
+    split_dir = mls_root / split
+    transcripts_path = split_dir / "transcripts.txt"
+    audio_dir = split_dir / "audio"
+
+    if not transcripts_path.exists():
+        raise FileNotFoundError(f"MLS transcripts not found: {transcripts_path}")
+
+    entries = []
+    skipped = 0
+    with open(transcripts_path, encoding="utf-8") as f:
+        for line in f:
+            line = line.strip()
+            if not line:
+                continue
+            parts = line.split("\t", 1)
+            if len(parts) != 2:
+                skipped += 1
+                continue
+            uid, transcript = parts
+            # uid format: {speaker_id}_{chapter_id}_{utterance_id}
+            uid_parts = uid.split("_")
+            if len(uid_parts) < 3:
+                skipped += 1
+                continue
+            speaker_id, chapter_id = uid_parts[0], uid_parts[1]
+            audio_path = audio_dir / speaker_id / chapter_id / f"{uid}.opus"
+            if not audio_path.exists():
+                skipped += 1
+                continue
+            entries.append(
+                ManifestEntry(
+                    id=f"mls_es_{uid}",
+                    audio_path=str(audio_path.resolve()),
+                    language="es",
+                    transcript=transcript.strip(),
+                    duration_s=None,
+                )
+            )
+            if max_entries and len(entries) >= max_entries:
+                break
+
+    print(f"Built {len(entries)} entries ({skipped} skipped) from {transcripts_path}")
     save_manifest(entries, output_path)
     return entries
 
@@ -309,6 +379,13 @@ def main():
     cv_p.add_argument("--output",  default="data/manifests/es_cv_test.jsonl")
     cv_p.add_argument("--max",     type=int, default=None)
 
+    # MLS Spanish
+    mls_p = sub.add_parser("mls", help="Build MLS Spanish manifest")
+    mls_p.add_argument("--mls-root", required=True)
+    mls_p.add_argument("--split",    default="test")
+    mls_p.add_argument("--output",   default="data/manifests/es_mls_test.jsonl")
+    mls_p.add_argument("--max",      type=int, default=None)
+
     # LibriSpeech
     ls_p = sub.add_parser("librispeech", help="Build LibriSpeech manifest")
     ls_p.add_argument("--ls-root", required=True)
@@ -330,7 +407,9 @@ def main():
 
     args = parser.parse_args()
 
-    if args.command == "cv":
+    if args.command == "mls":
+        build_mls_manifest(args.mls_root, args.split, args.output, args.max)
+    elif args.command == "cv":
         build_common_voice_manifest(args.cv_root, args.split, args.output, args.max)
     elif args.command == "librispeech":
         build_librispeech_manifest(args.ls_root, args.split, args.output, args.max)
