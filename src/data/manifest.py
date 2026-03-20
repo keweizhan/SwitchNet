@@ -27,6 +27,7 @@ class Segment:
     end: float
     language: str
     transcript: str
+    audio_path: Optional[str] = None  # set for bilingual-concat segments (separate files)
 
 
 @dataclass
@@ -60,10 +61,13 @@ class ManifestEntry:
         if self.duration_s is not None:
             d["duration_s"] = self.duration_s
         if self.segments:
-            d["segments"] = [
-                {"start": s.start, "end": s.end, "language": s.language, "transcript": s.transcript}
-                for s in self.segments
-            ]
+            seg_list = []
+            for s in self.segments:
+                sd = {"start": s.start, "end": s.end, "language": s.language, "transcript": s.transcript}
+                if s.audio_path:
+                    sd["audio_path"] = s.audio_path
+                seg_list.append(sd)
+            d["segments"] = seg_list
         return d
 
     def has_switch_points(self) -> bool:

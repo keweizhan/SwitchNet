@@ -290,15 +290,14 @@ def build_bilingual_concat_manifest(
                 "end": dur_first,
                 "language": first.language,
                 "transcript": first.transcript,
-                # Non-standard field: actual audio file for this segment
-                "_audio_path": first.audio_path,
+                "audio_path": first.audio_path,
             },
             {
                 "start": dur_first,
                 "end": dur_first + (second.duration_s or 0.0),
                 "language": second.language,
                 "transcript": second.transcript,
-                "_audio_path": second.audio_path,
+                "audio_path": second.audio_path,
             },
         ]
 

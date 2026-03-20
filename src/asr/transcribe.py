@@ -116,9 +116,14 @@ class Transcriber:
                 )
             parts = []
             for seg in entry.segments:
-                hyp = self._transcribe_segment(
-                    entry.audio_path, seg.start, seg.end, seg.language
-                )
+                if seg.audio_path:
+                    # Bilingual-concat: each segment is its own complete audio file
+                    hyp = self._transcribe_file(seg.audio_path, seg.language)
+                else:
+                    # Bilingual-interleaved: segments are time-slices of one file
+                    hyp = self._transcribe_segment(
+                        entry.audio_path, seg.start, seg.end, seg.language
+                    )
                 parts.append(hyp)
             return " ".join(parts)
 

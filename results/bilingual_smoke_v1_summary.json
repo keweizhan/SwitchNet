@@ -1,0 +1,127 @@
+{
+  "overall": {
+    "wer": 0.0383,
+    "mer": 0.0381,
+    "n_utterances": 10
+  },
+  "per_language": {
+    "bilingual": {
+      "wer": 0.0383,
+      "mer": 0.0381,
+      "n": 10
+    }
+  },
+  "per_entry": [
+    {
+      "wer": 0.0,
+      "mer": 0.0,
+      "substitutions": 0,
+      "deletions": 0,
+      "insertions": 0,
+      "ref_words": 41,
+      "hyp_words": 41,
+      "id": "bilingual_0000_ls_4970-29093-0015_mls_es_8585_9503_000061",
+      "language": "bilingual"
+    },
+    {
+      "wer": 0.0115,
+      "mer": 0.0115,
+      "substitutions": 1,
+      "deletions": 0,
+      "insertions": 0,
+      "ref_words": 87,
+      "hyp_words": 87,
+      "id": "bilingual_0001_mls_es_12525_11991_000072_ls_5639-40744-0030",
+      "language": "bilingual"
+    },
+    {
+      "wer": 0.0,
+      "mer": 0.0,
+      "substitutions": 0,
+      "deletions": 0,
+      "insertions": 0,
+      "ref_words": 28,
+      "hyp_words": 28,
+      "id": "bilingual_0002_ls_8555-292519-0011_mls_es_12249_11991_000013",
+      "language": "bilingual"
+    },
+    {
+      "wer": 0.1136,
+      "mer": 0.1111,
+      "substitutions": 3,
+      "deletions": 1,
+      "insertions": 1,
+      "ref_words": 44,
+      "hyp_words": 44,
+      "id": "bilingual_0003_mls_es_8585_7405_000006_ls_121-127105-0034",
+      "language": "bilingual"
+    },
+    {
+      "wer": 0.1364,
+      "mer": 0.1343,
+      "substitutions": 2,
+      "deletions": 6,
+      "insertions": 1,
+      "ref_words": 66,
+      "hyp_words": 61,
+      "id": "bilingual_0004_ls_8555-284447-0010_mls_es_4096_1378_000038",
+      "language": "bilingual"
+    },
+    {
+      "wer": 0.0,
+      "mer": 0.0,
+      "substitutions": 0,
+      "deletions": 0,
+      "insertions": 0,
+      "ref_words": 80,
+      "hyp_words": 80,
+      "id": "bilingual_0005_mls_es_6306_4006_000004_ls_3570-5695-0012",
+      "language": "bilingual"
+    },
+    {
+      "wer": 0.0256,
+      "mer": 0.0256,
+      "substitutions": 1,
+      "deletions": 0,
+      "insertions": 0,
+      "ref_words": 39,
+      "hyp_words": 39,
+      "id": "bilingual_0006_ls_2830-3980-0040_mls_es_5870_4006_000057",
+      "language": "bilingual"
+    },
+    {
+      "wer": 0.0323,
+      "mer": 0.0323,
+      "substitutions": 2,
+      "deletions": 0,
+      "insertions": 0,
+      "ref_words": 62,
+      "hyp_words": 62,
+      "id": "bilingual_0007_mls_es_11168_11991_000044_ls_6930-81414-0003",
+      "language": "bilingual"
+    },
+    {
+      "wer": 0.0455,
+      "mer": 0.0449,
+      "substitutions": 2,
+      "deletions": 1,
+      "insertions": 1,
+      "ref_words": 88,
+      "hyp_words": 88,
+      "id": "bilingual_0008_ls_5105-28240-0006_mls_es_8306_7405_000034",
+      "language": "bilingual"
+    },
+    {
+      "wer": 0.0,
+      "mer": 0.0,
+      "substitutions": 0,
+      "deletions": 0,
+      "insertions": 0,
+      "ref_words": 39,
+      "hyp_words": 39,
+      "id": "bilingual_0009_mls_es_7678_7613_000004_ls_4970-29095-0034",
+      "language": "bilingual"
+    }
+  ],
+  "switch_point": null
+}
