@@ -1,15 +1,75 @@
-# Audio Transcription Tool
+# SwitchNet
 
-Fast, accurate audio transcription using faster-whisper. Generates timestamped SRT and VTT subtitle files with sentence-level precision.
+A manifest-driven pipeline for evaluating Whisper on bilingual / code-switching speech. Built for EE519.
 
-## Installation
+The core idea is to study how Whisper handles English-Spanish code-switching by constructing controlled synthetic bilingual samples from real monolingual corpora (LibriSpeech and MLS Spanish), running inference under different conditions, and measuring WER at the utterance level and near language switch points.
 
-### Prerequisites
+Everything is driven by JSONL manifest files, which keeps data preparation, inference, and evaluation cleanly separated and repeatable.
 
-- Python 3.8+
-- FFmpeg
+---
 
-**Install FFmpeg:**
+## Current Capabilities
+
+- Monolingual English evaluation (LibriSpeech test-clean)
+- Monolingual Spanish evaluation (MLS Spanish test)
+- Bilingual oracle-segment routing: each segment decoded separately with its known language forced
+- Bilingual full-concat decoding: all segments concatenated with optional silence gaps, decoded in one Whisper pass
+- Switch-point WER: WER computed over a word window around each language boundary
+- Controlled experiments: 2-segment order effect (A1), pause vs no-pause (A2), 3-segment arrangement (A3)
+- English subtitle export for bilingual samples (`.srt` output with translate mode for Spanish segments)
+
+---
+
+## Repository Structure
+
+```
+SwitchNet/
++-- scripts/
+|   +-- build_manifests.py    # Build JSONL manifests from raw datasets
+|   +-- run_eval.py           # Main eval driver: transcribe + evaluate in one command
+|   +-- export_subtitles.py   # Export English .srt files for bilingual entries
+|
++-- src/
+|   +-- asr/
+|   |   +-- transcribe.py     # Whisper inference; handles mono, oracle-segment, full-concat
+|   |   +-- evaluate.py       # WER / MER / switch-point WER metrics
+|   |   +-- subtitles.py      # SRT building: cue timing, text cleanup, file writing
+|   +-- data/
+|   |   +-- manifest.py       # ManifestEntry / Segment dataclasses, load/save helpers
+|   +-- utils/
+|       +-- normalize.py      # Language-aware text normalization for WER
+|
++-- data/
+|   +-- manifests/            # JSONL manifest files (one per dataset / experiment)
+|   +-- LibriSpeech/          # English audio (test-clean, .flac)
+|   +-- mls_spanish/          # Spanish audio (test, .opus)
+|
++-- results/                  # Transcription outputs (.jsonl) and eval summaries (.json)
+```
+
+**scripts/** are entry points meant to be run from the repo root.
+**src/** is the library layer -- scripts import from here, nothing in src imports from scripts.
+
+---
+
+## Dependencies
+
+The code uses **openai-whisper** (the `whisper` package), not faster-whisper.
+
+```bash
+pip install -r requirements.txt
+```
+
+Which installs:
+
+- `openai-whisper` -- inference
+- `torch` -- CUDA detection (`torch.cuda.is_available()`) and tensor ops
+- `numpy` -- audio array handling in the bilingual concat path
+- `librosa` -- audio loading and duration inference (used in bilingual paths and subtitle timing)
+- `jiwer` -- WER / MER computation
+
+FFmpeg must be available on the system path for Whisper's audio decoding:
+
 ```bash
 # macOS
 brew install ffmpeg
@@ -21,269 +81,275 @@ sudo apt install ffmpeg
 choco install ffmpeg
 ```
 
-### Install Python Dependencies
+Python 3.10+ recommended (the code uses `str | Path` union syntax).
+
+---
+
+## Manifest Format
+
+The entire pipeline is manifest-driven. A manifest is a JSONL file where each line is one sample.
+
+**Monolingual entry:**
+```json
+{
+  "id": "ls_1089-134686-0000",
+  "audio_path": "/abs/path/to/1089-134686-0000.flac",
+  "language": "en",
+  "transcript": "HE HOPED THERE WOULD BE STEW FOR DINNER"
+}
+```
+
+**Bilingual entry** (synthetic concat of two separate audio files):
+```json
+{
+  "id": "bilingual_0000_ls_4970-29093-0015_mls_es_8585_9503_000061",
+  "audio_path": "__multi__",
+  "language": "bilingual",
+  "transcript": "YOU CAN BEGIN BY CARRYING A ROD después de haber bebido masqué un poco de tabaco",
+  "segments": [
+    {
+      "start": 0.0, "end": 3.3,
+      "language": "en",
+      "transcript": "YOU CAN BEGIN BY CARRYING A ROD",
+      "audio_path": "/abs/path/to/4970-29093-0015.flac",
+      "pause_s": 0.0
+    },
+    {
+      "start": 3.3, "end": 13.6,
+      "language": "es",
+      "transcript": "después de haber bebido masqué un poco de tabaco",
+      "audio_path": "/abs/path/to/8585_9503_000061.opus",
+      "pause_s": 0.0
+    }
+  ]
+}
+```
+
+Key fields:
+- `audio_path`: real path for monolingual entries; `"__multi__"` sentinel for bilingual entries (use `seg.audio_path` instead)
+- `language`: `"en"`, `"es"`, or `"bilingual"`
+- `segments`: list of `Segment` objects; required for bilingual entries; each has its own `audio_path`, `language`, `transcript`, and `pause_s`
+- `duration_s`: optional; used for RTF reporting; populated by the `durations` sub-command
+- `start` / `end`: timing in seconds; often `0.0` in current manifests because source entries lack `duration_s` -- timing is inferred from audio at runtime where needed
+
+Audio paths in the current manifests are absolute Windows paths. If you move the repo or run on a different machine, re-run `build_manifests.py` to regenerate them.
+
+---
+
+## Main Workflows
+
+### 1. Build manifests
 
 ```bash
-pip install faster-whisper ffmpeg-python
+# LibriSpeech (English)
+python scripts/build_manifests.py librispeech \
+    --ls-root data/LibriSpeech \
+    --split   test-clean \
+    --output  data/manifests/en_librispeech_test.jsonl
+
+# MLS Spanish
+python scripts/build_manifests.py mls \
+    --mls-root data/mls_spanish \
+    --split    test \
+    --output   data/manifests/es_mls_test.jsonl \
+    --max      200
+
+# Bilingual 2-segment, ES-first, 100 pairs
+python scripts/build_manifests.py bilingual \
+    --en-manifest data/manifests/en_librispeech_test.jsonl \
+    --es-manifest data/manifests/es_mls_test.jsonl \
+    --output      data/manifests/bilingual_es-en_100.jsonl \
+    --pairs       100 \
+    --pattern     es-en
+
+# Bilingual 2-segment with 0.5s pause gaps
+python scripts/build_manifests.py bilingual \
+    --en-manifest data/manifests/en_librispeech_test.jsonl \
+    --es-manifest data/manifests/es_mls_test.jsonl \
+    --output      data/manifests/bilingual_es-en_100_pause05.jsonl \
+    --pairs       100 \
+    --pattern     es-en \
+    --pause-s     0.5
+
+# 3-segment EN->ES->EN
+python scripts/build_manifests.py bilingual \
+    --en-manifest data/manifests/en_librispeech_test.jsonl \
+    --es-manifest data/manifests/es_mls_test.jsonl \
+    --output      data/manifests/bilingual_en-es-en_100_pause05.jsonl \
+    --pairs       100 \
+    --pattern     en-es-en \
+    --pause-s     0.5
+
+# (Optional) populate duration_s fields after building
+python scripts/build_manifests.py durations \
+    --manifest data/manifests/en_librispeech_test.jsonl
 ```
 
-Or using the included requirements file:
-```bash
-pip install -r requirements.txt
-```
+Supported patterns for bilingual: `en-es`, `es-en`, `mixed`, `en-es-en`, `es-en-es`.
 
-## Usage
-
-### Basic Usage
-
-```bash
-python transcribe.py input.mp3 output.srt
-```
-
-### Common Options
-
-```bash
-# High quality transcription
-python transcribe.py input.wav output.srt --model medium --beam-size 8
-
-# VTT format for web
-python transcribe.py input.m4a output.vtt
-
-# GPU acceleration
-python transcribe.py input.mp3 output.srt --device cuda --compute-type float16
-
-# Verbose logging
-python transcribe.py input.mp3 output.srt --verbose
-```
-
-### Available Arguments
-
-| Argument | Default | Description |
-|----------|---------|-------------|
-| `--model` | base | Model size: tiny, base, small, medium, large-v2, large-v3 |
-| `--device` | cpu | Device: cpu, cuda, auto |
-| `--compute-type` | int8 | Precision: int8, float16, float32 |
-| `--language` | en | Language code or 'auto' for detection |
-| `--beam-size` | 5 | Beam search width (1-10, higher is slower but more accurate) |
-| `--no-vad` | - | Disable Voice Activity Detection |
-| `--verbose` | - | Enable debug logging |
-
-### Python API
-
-```python
-from transcribe import transcribe_to_srt, transcribe_to_vtt
-
-# Basic transcription
-transcribe_to_srt("lecture.mp3", "lecture.srt")
-
-# Custom settings
-transcribe_to_srt(
-    audio_path="interview.wav",
-    output_path="interview.srt",
-    model_size="medium",
-    beam_size=8
-)
-
-# VTT format
-transcribe_to_vtt("podcast.m4a", "podcast.vtt")
-
-# Batch processing
-from pathlib import Path
-
-for audio_file in Path("audio").glob("*.mp3"):
-    output_file = audio_file.with_suffix(".srt")
-    transcribe_to_srt(str(audio_file), str(output_file))
-```
-
-### VS Code Integration
-
-VS Code tasks are pre-configured in `.vscode/tasks.json`:
-
-1. Open an audio file in VS Code
-2. Press `Ctrl+Shift+P` and select "Tasks: Run Task"
-3. Choose a transcription task (base, small, medium, or custom)
-4. Output file will be created in the same directory
-
-## Model Selection
-
-| Model | Size | Speed | Accuracy | Use Case |
-|-------|------|-------|----------|----------|
-| tiny | 40MB | Fastest | 85% | Quick drafts, testing |
-| base | 75MB | Fast | 92% | General use (recommended) |
-| small | 245MB | Moderate | 95% | Better quality |
-| medium | 775MB | Slow | 97% | High quality needs |
-| large-v2/v3 | 1.5GB | Slowest | 98% | Maximum accuracy |
-
-**Processing time** (1 hour audio on Intel i7):
-- tiny: 2-3 min
-- base: 3-5 min
-- small: 6-10 min
-- medium: 12-20 min
-- large-v3: 25-40 min
-
-**GPU acceleration** (CUDA): 3-5x faster than CPU.
-
-## Technical Details
-
-### Architecture
-
-The tool uses faster-whisper, a CTranslate2-optimized implementation of OpenAI's Whisper that provides 4x speed improvement with identical accuracy.
-
-**Key components:**
-- Whisper transformer model for speech recognition
-- Silero VAD for silence detection and removal
-- Beam search decoder for accuracy
-- INT8/FP16 quantization for memory efficiency
-
-**Timestamp accuracy:** Sentence-level with ~100ms precision. VAD filtering improves alignment by removing silence.
-
-### Performance Characteristics
-
-**Memory usage (base model):**
-- CPU (int8): ~300MB
-- GPU (float16): ~600MB
-
-**Supported audio formats:** mp3, wav, m4a, flac, ogg, opus, webm
-
-**Output formats:**
-- SRT: Standard SubRip format with comma separators
-- VTT: WebVTT format with period separators
-- UTF-8 encoding for international characters
-
-### Design Decisions
-
-**faster-whisper over OpenAI Whisper:**
-- 4x faster inference
-- 70% lower memory usage (with int8 quantization)
-- Identical accuracy
-- Smaller dependency footprint
-
-**Sentence-level over word-level timestamps:**
-- Simpler implementation
-- Faster processing
-- Sufficient for most use cases (lectures, interviews, general transcription)
-- Word-level alignment (WhisperX) adds complexity with minimal benefit for standard workflows
-
-## Advanced Usage
-
-### GPU Acceleration
-
-CUDA support is included with faster-whisper. No additional installation required.
+### 2. Run evaluation
 
 ```bash
-python transcribe.py audio.mp3 output.srt --device cuda --compute-type float16
+# Monolingual Spanish baseline
+python scripts/run_eval.py \
+    --manifest data/manifests/es_mls_test.jsonl \
+    --model    large-v3 \
+    --tag      es_mls_baseline
+
+# Bilingual oracle-segment (default mode)
+python scripts/run_eval.py \
+    --manifest data/manifests/bilingual_es-en_100.jsonl \
+    --model    large-v3 \
+    --tag      bilingual_es-en_100_oracle
+
+# Bilingual full-concat, no pause
+python scripts/run_eval.py \
+    --manifest         data/manifests/bilingual_es-en_100.jsonl \
+    --model            large-v3 \
+    --tag              a2_es-en_100_nopause \
+    --bilingual-mode   full_concat
+
+# Bilingual full-concat, 0.5s pause
+python scripts/run_eval.py \
+    --manifest         data/manifests/bilingual_es-en_100_pause05.jsonl \
+    --model            large-v3 \
+    --tag              a2_es-en_100_pause05 \
+    --bilingual-mode   full_concat
+
+# Run on CPU explicitly
+python scripts/run_eval.py \
+    --manifest data/manifests/bilingual_es-en_100.jsonl \
+    --model    large-v3 \
+    --device   cpu \
+    --tag      a2_es-en_100_nopause_cpu \
+    --bilingual-mode full_concat
+
+# Skip transcription if results file already exists (re-run eval only)
+python scripts/run_eval.py \
+    --manifest        data/manifests/bilingual_es-en_100.jsonl \
+    --tag             a2_es-en_100_nopause_cpu \
+    --skip-transcribe
 ```
 
-Requirements: NVIDIA GPU with CUDA Compute Capability 7.0+
+Results are written to `results/<tag>.jsonl` (per-utterance hypotheses) and `results/<tag>_summary.json` (aggregate metrics).
 
-### Custom VAD Parameters
-
-Edit the `transcribe.py` file to adjust silence detection:
-
-```python
-vad_parameters=dict(
-    min_silence_duration_ms=1000,  # Default: 500
-    speech_pad_ms=400               # Padding around speech
-)
-```
-
-### Logging Configuration
-
-The tool uses Python's standard logging module. Default level: INFO.
+### 3. Export English subtitles
 
 ```bash
-# Debug logging
-python transcribe.py audio.mp3 output.srt --verbose
+# Smoke test: 1 entry, translate ES->EN
+python scripts/export_subtitles.py \
+    --manifest    data/manifests/bilingual_smoke.jsonl \
+    --output-dir  results/subtitles/smoke \
+    --model       large-v3 \
+    --translate-es \
+    --limit       1
+
+# 5-entry batch validation
+python scripts/export_subtitles.py \
+    --manifest    data/manifests/bilingual_es-en_100.jsonl \
+    --output-dir  results/subtitles/es-en_batch5 \
+    --model       large-v3 \
+    --translate-es \
+    --limit       5
+
+# Full run
+python scripts/export_subtitles.py \
+    --manifest    data/manifests/bilingual_es-en_100.jsonl \
+    --output-dir  results/subtitles/es-en_100 \
+    --model       large-v3 \
+    --translate-es
+
+# Process a single entry by ID
+python scripts/export_subtitles.py \
+    --manifest    data/manifests/bilingual_smoke.jsonl \
+    --output-dir  results/subtitles/single \
+    --model       large-v3 \
+    --translate-es \
+    --sample-id   bilingual_0000_ls_XXX_mls_es_YYY
 ```
 
-Logs include:
-- Model loading status
-- Language detection results
-- Processing progress
-- Output file location
+Without `--translate-es`, every segment is transcribed in its source language (useful for debugging the pipeline without caring about English output).
 
-## Troubleshooting
+Output per entry: one `<id>.srt` + one `<id>.json` sidecar with per-segment hypotheses and cue timing.
 
-**"faster-whisper not found"**
-```bash
-pip install faster-whisper
-```
+---
 
-**"FFmpeg error" or audio format issues**
-```bash
-# Verify FFmpeg is installed
-ffmpeg -version
+## Experiment Summary
 
-# Reinstall if needed (see Installation section)
-```
+All experiments use `large-v3` on 100-pair bilingual manifests drawn from LibriSpeech (EN) and MLS Spanish (ES).
 
-**Slow processing**
-```bash
-# Use smaller model
-python transcribe.py audio.mp3 output.srt --model tiny
+### A1 - Segment order effect under oracle routing
 
-# Or enable GPU
-python transcribe.py audio.mp3 output.srt --device cuda
-```
+Oracle-segment mode decodes each segment independently with its known language. A1 asks whether the order of EN/ES segments affects whole-utterance WER.
 
-**Poor accuracy on technical content**
-```bash
-# Increase model size and beam width
-python transcribe.py audio.mp3 output.srt --model medium --beam-size 10
-```
+| Condition | WER | MER |
+|---|---|---|
+| EN->ES | 0.0385 | 0.0381 |
+| ES->EN | 0.0348 | 0.0345 |
 
-**First run downloads model files**
-- Model files (~75MB for base) download automatically
-- Cached in `~/.cache/huggingface/`
-- Subsequent runs are faster
+There is a small consistent difference, with ES-first slightly lower. The gap is not large enough to claim a stable mechanism -- it likely reflects variation in the specific utterance samples rather than a strong position effect.
 
-## File Structure
+### A2 - Pause vs no-pause under full-concat decoding
 
-```
-.
-├── transcribe.py          # Main script
-├── requirements.txt       # Dependencies
-├── README.md             # This file
-├── example_usage.py      # API usage examples
-├── setup.sh              # Automated setup script
-└── .vscode/
-    └── tasks.json        # VS Code task definitions
-```
+Full-concat mode concatenates all segment audio into one waveform and runs a single Whisper pass with `language=None`. A2 tests whether inserting a 0.5s real silence gap between segments helps.
 
-## Future Enhancements
+| Condition | Overall WER | Overall MER | Switch-pt WER | Switch-pt MER |
+|---|---|---|---|---|
+| No pause  | 0.3170 | 0.3076 | 0.4257 | 0.4177 |
+| 0.5s pause | 0.3008 | 0.2943 | 0.4076 | 0.3992 |
 
-**Word-level forced alignment:** Current implementation provides sentence-level timestamps. Word-level alignment (similar to WhisperX) would require integrating a phoneme-based forced alignment model. Implementation complexity: High. Use case: Language learning, karaoke-style subtitles.
+Adding a real 0.5s silence gap gives a small but consistent improvement across the board, including near switch points. Full-concat WER is much higher than oracle-segment WER -- the gap is expected since full-concat gives Whisper no language hint.
 
-**Speaker diarization:** Multi-speaker detection and labeling. Would require integrating pyannote.audio or similar. Implementation complexity: High. Use case: Interviews, meetings with multiple speakers.
+### A3 - 3-segment arrangement effect
 
-## Evaluation (WER) on LibriSpeech (test-clean)
+A3 extends A2 to 3-segment patterns. All conditions use 0.5s pauses and full-concat decoding.
 
-If you want to **verify transcription quality** quantitatively, you can evaluate on LibriSpeech `test-clean`
-using **WER (Word Error Rate)**.
+| Condition | Overall WER | Overall MER | Switch-pt WER | Switch-pt MER |
+|---|---|---|---|---|
+| ES->EN (2-seg baseline) | 0.3008 | 0.2943 | 0.4076 | 0.3992 |
+| ES->EN->ES (3-seg)      | 0.2425 | 0.2294 | 0.5880 | 0.5748 |
+| EN->ES->EN (3-seg)      | 0.2210 | 0.2123 | 0.3385 | 0.3322 |
 
-### Dataset layout (expected)
+Overall WER improves in both 3-segment conditions compared to the 2-segment baseline, but switch-point WER behaves differently: EN->ES->EN improves at switch points while ES->EN->ES gets noticeably worse. Language arrangement matters more than simply adding more switches.
 
-Unzip LibriSpeech so you have a structure like:
+---
 
-```text
-data/LibriSpeech/test-clean/<speaker_id>/<chapter_id>/*.flac
-data/LibriSpeech/test-clean/<speaker_id>/<chapter_id>/*.trans.txt
+## English Subtitle Export
 
+`scripts/export_subtitles.py` adds English subtitle generation on top of the existing bilingual pipeline.
 
+How it works:
+- Loads a bilingual manifest and filters for `language="bilingual"` entries
+- Calls `_transcribe_bilingual_oracle` with a per-language task map
+- English segments: `task="transcribe"` (output is English as-is)
+- Spanish segments: `task="translate"` when `--translate-es` is set (Whisper translates to English)
+- Timing is taken from `segment.start`/`segment.end` if available; otherwise inferred from the audio file duration via librosa
+- Cue timestamps are built cumulatively, respecting `pause_s` gaps between segments
+- Light text cleanup is applied before writing: whitespace normalization, first-character capitalization, period appended if no terminal punctuation present
 
-`*.trans.txt` contains the **ground-truth transcript** for each utterance ID (e.g., `61-70968-0000`).
+This is a **segment-level, manifest-aware** subtitle export. It is not free-form code-switch subtitle generation -- it relies on the manifest knowing where each language segment begins and ends. The output quality is bounded by Whisper's translate accuracy, which can produce translation errors on short or ambiguous segments.
 
-### Quick sanity check (single file)
+---
 
-```bash
-python transcribe.py "data/LibriSpeech/test-clean/61/70968/61-70968-0000.flac" "eval_outputs/61-70968-0000.srt" --model base --language en
+## Practical Notes and Limitations
 
-## References
+- **Bilingual samples are synthetic.** Each bilingual entry is constructed by concatenating two (or three) real monolingual utterances. This is not natural code-switched speech -- it is a controlled approximation.
 
-- [faster-whisper](https://github.com/guillaumekln/faster-whisper) - CTranslate2 optimized Whisper
-- [OpenAI Whisper](https://github.com/openai/whisper) - Original model
-- [CTranslate2](https://opennmt.net/CTranslate2/) - Inference optimization
+- **Manifest paths are absolute and machine-specific.** If you move the data or change machines, re-run `build_manifests.py` to regenerate the manifests. There is no path remapping utility currently.
 
-## License
+- **Segment timing is often 0.0 in current manifests.** The `start`/`end` fields on bilingual segments are only populated if the source entry had `duration_s`. Run `build_manifests.py durations` on your source manifests before building bilingual ones if you need accurate timing. Subtitle export handles this gracefully by inferring duration from audio, but it is slower.
 
-MIT
+- **CPU vs GPU for large-v3 full-concat.** On the current test machine, CPU inference produced lower WER than GPU for full-concat experiments. This was consistent enough to prefer CPU for those runs. The cause is likely numerical precision differences (GPU uses fp16, CPU uses fp32). Oracle-segment runs were not systematically compared.
+
+- **Translation quality.** Whisper's `task="translate"` works reasonably for full sentences but can produce noticeably wrong output on short segments or segments with unusual vocabulary. The subtitle output for translated Spanish segments should be treated as a rough English rendering, not a reliable translation.
+
+- **This is research/development tooling.** There is no error recovery, no resume-from-checkpoint, and no production-facing interface. If a single entry errors during a long run, the script logs the error and continues -- the results file will have a blank hypothesis for that entry.
+
+---
+
+## Future Work
+
+- **Preprocessing ablations.** Test denoising or normalization before feeding Whisper, especially for the full-concat path where there is no language forcing.
+- **Subtitle cue splitting.** Currently one oracle segment = one subtitle cue. Long segments (10+ seconds) produce unwieldy cue text. Using Whisper's word-level timestamps to split long segments into shorter cues would improve readability.
+- **Timestamp refinement.** Current cue timing comes from audio file durations. Per-word timestamps from Whisper's output (`result["segments"]`) would give tighter alignment.
+- **Natural code-switching data.** The synthetic concatenation approach is a useful proxy but not the same as real code-switched speech. Evaluation on an actual CS corpus (e.g., Miami Bangor, SEAME) would be a meaningful next step.

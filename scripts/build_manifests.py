@@ -66,7 +66,7 @@ def build_common_voice_manifest(
         raise FileNotFoundError(f"Common Voice TSV not found: {tsv_path}")
 
     entries = []
-    with open(tsv_path, newline="", encoding="utf-8") as f:
+    with open(tsv_path, newline="", encoding="utf-8-sig") as f:
         reader = csv.DictReader(f, delimiter="\t")
         rows = list(reader)
 
@@ -197,7 +197,7 @@ def build_mls_manifest(
 
     entries = []
     skipped = 0
-    with open(transcripts_path, encoding="utf-8") as f:
+    with open(transcripts_path, encoding="utf-8-sig") as f:
         for line in f:
             line = line.strip()
             if not line:
@@ -244,20 +244,25 @@ def build_bilingual_concat_manifest(
     output_path: str | Path = "data/manifests/bilingual_concat.jsonl",
     n_pairs: int = 100,
     seed: int = 42,
+    pattern: str = "mixed",
+    pause_s: float = 0.0,
 ) -> List[ManifestEntry]:
     """
     Build a bilingual manifest by pairing EN and ES utterances.
 
-    Strategy: concatenate audio files at the Python level is complex
-    (requires ffmpeg/pydub). Instead, we create manifest entries that
-    list BOTH segments as if they were sub-segments of a single logical
-    "utterance". The bilingual transcriber in transcribe.py will process
-    each segment file independently and merge the transcripts.
+    Each entry has audio_path="__multi__" (sentinel) and a segments list
+    where each segment carries its own audio_path. The transcriber processes
+    each segment file independently and merges the transcripts.
 
-    Each bilingual entry uses a special audio_path format:
-      "__multi__"   (sentinel ¡ª real paths are in the segments)
-
-    The transcriber handles this via segment-level dispatch.
+    Args:
+        pattern:  Segment order / layout. Choices:
+                    "en-es"     -- EN first, ES second (all pairs)
+                    "es-en"     -- ES first, EN second (all pairs)
+                    "mixed"     -- alternating en-es / es-en (default)
+                    "en-es-en"  -- 3 segments: EN, ES, EN (uses 2 EN per pair)
+                    "es-en-es"  -- 3 segments: ES, EN, ES (uses 2 ES per pair)
+        pause_s:  Metadata-only gap (seconds) stored between segments.
+                  Transcription ignores it now; reserved for future audio concat.
     """
     from src.data.manifest import load_manifest
 
@@ -268,62 +273,83 @@ def build_bilingual_concat_manifest(
     random.shuffle(en_entries)
     random.shuffle(es_entries)
 
-    n = min(n_pairs, len(en_entries), len(es_entries))
-    pairs = list(zip(en_entries[:n], es_entries[:n]))
+    # For 3-segment patterns we consume more entries from one language pool.
+    if pattern == "en-es-en":
+        # Each pair uses 2 EN + 1 ES
+        n = min(n_pairs, len(en_entries) // 2, len(es_entries))
+        en_a = en_entries[:n]
+        en_b = en_entries[n: 2 * n]
+        es_a = es_entries[:n]
+        group_iter = zip(en_a, es_a, en_b)
+    elif pattern == "es-en-es":
+        # Each pair uses 1 EN + 2 ES
+        n = min(n_pairs, len(en_entries), len(es_entries) // 2)
+        es_a = es_entries[:n]
+        es_b = es_entries[n: 2 * n]
+        en_a = en_entries[:n]
+        group_iter = zip(es_a, en_a, es_b)
+    else:
+        n = min(n_pairs, len(en_entries), len(es_entries))
+        group_iter = zip(en_entries[:n], es_entries[:n])
+
+    def _seg(e, start: float) -> dict:
+        """Build one segment dict for entry e starting at `start`."""
+        end = start + (e.duration_s or 0.0)
+        return {
+            "start": start,
+            "end": end,
+            "language": e.language,
+            "transcript": e.transcript,
+            "audio_path": e.audio_path,
+            "pause_s": pause_s,      # metadata; 0.0 means no pause
+        }
 
     bilingual_entries = []
-    for i, (en_e, es_e) in enumerate(pairs):
-        # Alternate which language comes first (EN¡úES or ES¡úEN)
-        if i % 2 == 0:
-            first, second = en_e, es_e
-        else:
-            first, second = es_e, en_e
+    for i, group in enumerate(group_iter):
+        if pattern == "en-es-en":
+            en1, es1, en2 = group
+            ordered = [en1, es1, en2]
+        elif pattern == "es-en-es":
+            es1, en1, es2 = group
+            ordered = [es1, en1, es2]
+        elif pattern == "es-en":
+            en_e, es_e = group
+            ordered = [es_e, en_e]
+        elif pattern == "en-es":
+            en_e, es_e = group
+            ordered = [en_e, es_e]
+        else:  # mixed: alternate en-es / es-en
+            en_e, es_e = group
+            ordered = [en_e, es_e] if i % 2 == 0 else [es_e, en_e]
 
-        # Build a pseudo-segment list using separate audio files
-        # We use duration offsets: first=0¡údur_first, second=dur_first¡úend
-        # Since we don't always have durations, use placeholder 0.0/1.0
-        dur_first = first.duration_s or 0.0
+        # Build segments with cumulative time offsets
+        segments = []
+        cursor = 0.0
+        for e in ordered:
+            segments.append(_seg(e, cursor))
+            cursor = segments[-1]["end"]
 
-        segments = [
-            {
-                "start": 0.0,
-                "end": dur_first,
-                "language": first.language,
-                "transcript": first.transcript,
-                "audio_path": first.audio_path,
-            },
-            {
-                "start": dur_first,
-                "end": dur_first + (second.duration_s or 0.0),
-                "language": second.language,
-                "transcript": second.transcript,
-                "audio_path": second.audio_path,
-            },
-        ]
-
-        combined_transcript = first.transcript + " " + second.transcript
+        combined_transcript = " ".join(e.transcript for e in ordered)
+        total_dur = cursor or None
 
         entry = ManifestEntry(
-            id=f"bilingual_{i:04d}_{first.id}_{second.id}",
-            audio_path="__multi__",   # sentinel
+            id=f"bilingual_{pattern}_{i:04d}_" + "_".join(e.id for e in ordered),
+            audio_path="__multi__",
             language="bilingual",
             transcript=combined_transcript,
-            duration_s=(first.duration_s or 0) + (second.duration_s or 0) or None,
+            duration_s=total_dur,
         )
-        # Store raw segment dicts (including _audio_path) so transcriber can use them
-        entry.segments = []  # will be set below via raw dict
         bilingual_entries.append((entry, segments))
 
-    # Write manually to preserve _audio_path in segments
     output_path = Path(output_path)
     output_path.parent.mkdir(parents=True, exist_ok=True)
-    with open(output_path, "w") as f:
+    with open(output_path, "w", encoding="utf-8") as f:
         for entry, segs in bilingual_entries:
             d = entry.to_dict()
             d["segments"] = segs
             f.write(json.dumps(d, ensure_ascii=False) + "\n")
 
-    print(f"Built {len(bilingual_entries)} bilingual entries ¡ú {output_path}")
+    print(f"Built {len(bilingual_entries)} bilingual ({pattern}) entries -> {output_path}")
     return [e for e, _ in bilingual_entries]
 
 
@@ -398,6 +424,11 @@ def main():
     bi_p.add_argument("--es-manifest", required=True)
     bi_p.add_argument("--output",      default="data/manifests/bilingual_concat.jsonl")
     bi_p.add_argument("--pairs",       type=int, default=100)
+    bi_p.add_argument("--pattern",     default="mixed",
+                      choices=["en-es", "es-en", "mixed", "en-es-en", "es-en-es"],
+                      help="Segment order pattern (default: mixed)")
+    bi_p.add_argument("--pause-s",     type=float, default=0.0,
+                      help="Metadata pause between segments in seconds (default: 0)")
 
     # Duration population
     dur_p = sub.add_parser("durations", help="Populate duration_s fields")
@@ -413,7 +444,10 @@ def main():
     elif args.command == "librispeech":
         build_librispeech_manifest(args.ls_root, args.split, args.output, args.max)
     elif args.command == "bilingual":
-        build_bilingual_concat_manifest(args.en_manifest, args.es_manifest, args.output, args.pairs)
+        build_bilingual_concat_manifest(
+            args.en_manifest, args.es_manifest, args.output, args.pairs,
+            pattern=args.pattern, pause_s=args.pause_s,
+        )
     elif args.command == "durations":
         populate_durations(args.manifest, args.output)
 

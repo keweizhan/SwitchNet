@@ -106,6 +106,14 @@ def evaluate_results(
     sp_windows_ref: list[str] = []  # switch-point window tokens
     sp_windows_hyp: list[str] = []
 
+    # Segment-level accumulators (bilingual only)
+    seg_lang_refs:   dict[str, list] = {}   # keyed by language ("en"/"es")
+    seg_lang_hyps:   dict[str, list] = {}
+    seg_pos_refs:    dict[str, list] = {}   # keyed by "position_0", "position_1", …
+    seg_pos_hyps:    dict[str, list] = {}
+    seg_lp_refs:     dict[str, list] = {}   # keyed by "en_pos0", "es_pos1", …
+    seg_lp_hyps:     dict[str, list] = {}
+
     for r in results:
         if r.get("error"):
             continue
@@ -134,6 +142,24 @@ def evaluate_results(
             sp_windows_ref.extend(sp_segs["ref"])
             sp_windows_hyp.extend(sp_segs["hyp"])
 
+        # Segment-level accumulation (bilingual only)
+        for seg in r.get("segment_outputs", []):
+            slang = seg["language"]
+            pos   = seg["position"]
+            s_ref = _norm(seg["reference"], slang)
+            s_hyp = _norm(seg["hypothesis"], slang)
+
+            seg_lang_refs.setdefault(slang, []).append(s_ref)
+            seg_lang_hyps.setdefault(slang, []).append(s_hyp)
+
+            pos_key = f"position_{pos}"
+            seg_pos_refs.setdefault(pos_key, []).append(s_ref)
+            seg_pos_hyps.setdefault(pos_key, []).append(s_hyp)
+
+            lp_key = f"{slang}_pos{pos}"
+            seg_lp_refs.setdefault(lp_key, []).append(s_ref)
+            seg_lp_hyps.setdefault(lp_key, []).append(s_hyp)
+
     # Aggregate WER (corpus-level, not mean of per-utterance WER)
     def corpus_wer(refs, hyps):
         joined_ref = [" ".join(refs)]
@@ -148,6 +174,21 @@ def evaluate_results(
         w, m_val = corpus_wer(lang_refs[lang], lang_hyps[lang])
         per_lang_metrics[lang] = {"wer": w, "mer": m_val, "n": len(lang_refs[lang])}
 
+    # Segment-level summaries (present only when segment_outputs exist)
+    per_segment_language: dict = {}
+    per_position:         dict = {}
+    per_language_position: dict = {}
+    if seg_lang_refs:
+        for k in seg_lang_refs:
+            w, m_val = corpus_wer(seg_lang_refs[k], seg_lang_hyps[k])
+            per_segment_language[k] = {"wer": w, "mer": m_val, "n": len(seg_lang_refs[k])}
+        for k in seg_pos_refs:
+            w, m_val = corpus_wer(seg_pos_refs[k], seg_pos_hyps[k])
+            per_position[k] = {"wer": w, "mer": m_val, "n": len(seg_pos_refs[k])}
+        for k in seg_lp_refs:
+            w, m_val = corpus_wer(seg_lp_refs[k], seg_lp_hyps[k])
+            per_language_position[k] = {"wer": w, "mer": m_val, "n": len(seg_lp_refs[k])}
+
     summary = {
         "overall": {
             "wer": overall_wer,
@@ -156,6 +197,9 @@ def evaluate_results(
         },
         "per_language": per_lang_metrics,
         "per_entry": per_entry,
+        "per_segment_language":  per_segment_language  or None,
+        "per_position":          per_position          or None,
+        "per_language_position": per_language_position or None,
     }
 
     # Switch-point WER (only if we have switch-point entries)
@@ -205,7 +249,29 @@ def _extract_switchpoint_windows(
 
     total_dur = sum(s.end - s.start for s in entry.segments)
     if total_dur <= 0:
-        return {"ref": [], "hyp": []}
+        # Fallback: no timing info — estimate word positions from per-segment
+        # transcript token counts (normalized per segment language).
+        seg_word_counts = [
+            len(_norm(s.transcript, s.language).split())
+            for s in entry.segments
+        ]
+        if sum(seg_word_counts) == 0:
+            return {"ref": [], "hyp": []}
+        sp_word_positions = []
+        cumulative = 0
+        for i, count in enumerate(seg_word_counts[:-1]):
+            cumulative += count
+            if entry.segments[i].language != entry.segments[i + 1].language:
+                sp_word_positions.append(cumulative)
+        ref_windows, hyp_windows = [], []
+        for pos in sp_word_positions:
+            lo = max(0, pos - window_words)
+            hi = min(len(ref_toks), pos + window_words)
+            ref_windows.append(" ".join(ref_toks[lo:hi]))
+            h_lo = max(0, pos - window_words)
+            h_hi = min(len(hyp_toks), pos + window_words)
+            hyp_windows.append(" ".join(hyp_toks[h_lo:h_hi]))
+        return {"ref": ref_windows, "hyp": hyp_windows}
 
     # Assign word counts proportionally to segment duration
     seg_word_counts = []

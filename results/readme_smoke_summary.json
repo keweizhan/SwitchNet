@@ -1,0 +1,69 @@
+{
+  "overall": {
+    "wer": 0.0,
+    "mer": 0.0,
+    "n_utterances": 1
+  },
+  "per_language": {
+    "bilingual": {
+      "wer": 0.0,
+      "mer": 0.0,
+      "n": 1
+    }
+  },
+  "per_entry": [
+    {
+      "wer": 0.0,
+      "mer": 0.0,
+      "substitutions": 0,
+      "deletions": 0,
+      "insertions": 0,
+      "ref_words": 41,
+      "hyp_words": 41,
+      "id": "bilingual_0000_ls_4970-29093-0015_mls_es_8585_9503_000061",
+      "language": "bilingual"
+    }
+  ],
+  "per_segment_language": {
+    "en": {
+      "wer": 0.0,
+      "mer": 0.0,
+      "n": 1
+    },
+    "es": {
+      "wer": 0.0,
+      "mer": 0.0,
+      "n": 1
+    }
+  },
+  "per_position": {
+    "position_0": {
+      "wer": 0.0,
+      "mer": 0.0,
+      "n": 1
+    },
+    "position_1": {
+      "wer": 0.0,
+      "mer": 0.0,
+      "n": 1
+    }
+  },
+  "per_language_position": {
+    "en_pos0": {
+      "wer": 0.0,
+      "mer": 0.0,
+      "n": 1
+    },
+    "es_pos1": {
+      "wer": 0.0,
+      "mer": 0.0,
+      "n": 1
+    }
+  },
+  "switch_point": {
+    "wer": 0.0,
+    "mer": 0.0,
+    "window_words": 5,
+    "n_windows": 1
+  }
+}

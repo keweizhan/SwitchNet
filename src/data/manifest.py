@@ -28,6 +28,7 @@ class Segment:
     language: str
     transcript: str
     audio_path: Optional[str] = None  # set for bilingual-concat segments (separate files)
+    pause_s: float = 0.0              # metadata-only gap before next segment (future audio concat)
 
 
 @dataclass
@@ -41,7 +42,9 @@ class ManifestEntry:
 
     @classmethod
     def from_dict(cls, d: dict) -> "ManifestEntry":
-        segments = [Segment(**s) for s in d.get("segments", [])]
+        _seg_fields = {f for f in Segment.__dataclass_fields__}
+        segments = [Segment(**{k: v for k, v in s.items() if k in _seg_fields})
+                    for s in d.get("segments", [])]
         return cls(
             id=d["id"],
             audio_path=d["audio_path"],
@@ -66,6 +69,8 @@ class ManifestEntry:
                 sd = {"start": s.start, "end": s.end, "language": s.language, "transcript": s.transcript}
                 if s.audio_path:
                     sd["audio_path"] = s.audio_path
+                if s.pause_s:
+                    sd["pause_s"] = s.pause_s
                 seg_list.append(sd)
             d["segments"] = seg_list
         return d
