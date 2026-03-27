@@ -45,31 +45,94 @@ class Transcriber:
         self,
         model_size: str = "large-v3",
         device: Optional[str] = None,
+        preprocessor=None,
     ):
+        """
+        Args:
+            preprocessor: optional callable (audio: np.ndarray, sr: int) -> np.ndarray.
+                Applied to every audio array before it is fed to Whisper.
+                Use src.audio.preprocess.get_preprocessor() to build one.
+                None (default) means no preprocessing -- existing behaviour unchanged.
+        """
         if device is None:
             device = "cuda" if torch.cuda.is_available() else "cpu"
         print(f"Loading Whisper {model_size} on {device}...")
         self.model = whisper.load_model(model_size, device=device)
         self.device = device
         self.model_size = model_size
+        self.preprocessor = preprocessor  # (np.ndarray, int) -> np.ndarray | None
 
     # ------------------------------------------------------------------
     # Low-level helpers
     # ------------------------------------------------------------------
 
+    def _load_file_audio(self, audio_path: str, sr: int = 16000) -> np.ndarray:
+        """
+        Load an audio file as a float32 numpy array and apply self.preprocessor.
+        Called by _transcribe_file* when preprocessing is enabled.
+        """
+        import librosa
+        audio, _ = librosa.load(audio_path, sr=sr, mono=True)
+        audio = audio.astype(np.float32)
+        if self.preprocessor is not None:
+            audio = self.preprocessor(audio, sr)
+        return audio
+
     def _transcribe_file(self, audio_path: str, language: str, task: str = "transcribe") -> str:
         """Transcribe a single audio file with a fixed language.
 
         Args:
-            task: Whisper task — "transcribe" (default) or "translate" (output English).
+            task: Whisper task -- "transcribe" (default) or "translate" (output English).
+
+        If self.preprocessor is set, the audio is loaded, preprocessed, and passed
+        as a numpy array.  Otherwise the file path is passed directly (faster path).
         """
-        result = self.model.transcribe(
-            audio_path,
-            language=language,
-            task=task,
-            fp16=(self.device != "cpu"),
-        )
+        if self.preprocessor is not None:
+            audio = self._load_file_audio(audio_path)
+            result = self.model.transcribe(
+                audio,
+                language=language,
+                task=task,
+                fp16=(self.device != "cpu"),
+            )
+        else:
+            result = self.model.transcribe(
+                audio_path,
+                language=language,
+                task=task,
+                fp16=(self.device != "cpu"),
+            )
         return result["text"].strip()
+
+    def _transcribe_file_with_segments(
+        self, audio_path: str, language: str, task: str = "transcribe"
+    ) -> tuple:
+        """
+        Like _transcribe_file but also returns Whisper's internal segment list.
+
+        Returns:
+            (text: str, whisper_segments: list[dict])
+            Each dict in whisper_segments has at minimum:
+              {"start": float, "end": float, "text": str}
+            Timestamps are relative to the start of audio_path (0-based).
+            Returns (text, []) if Whisper found no speech.
+        """
+        if self.preprocessor is not None:
+            audio = self._load_file_audio(audio_path)
+            result = self.model.transcribe(
+                audio,
+                language=language,
+                task=task,
+                fp16=(self.device != "cpu"),
+            )
+        else:
+            result = self.model.transcribe(
+                audio_path,
+                language=language,
+                task=task,
+                fp16=(self.device != "cpu"),
+            )
+        return result["text"].strip(), result.get("segments", [])
 
     def _transcribe_segment(
         self,
@@ -84,21 +147,24 @@ class Transcriber:
         Requires librosa for slice; falls back to full-file if not available.
 
         Args:
-            task: Whisper task — "transcribe" (default) or "translate" (output English).
+            task: Whisper task -- "transcribe" (default) or "translate" (output English).
         """
         try:
             import librosa
 
-            audio, sr = librosa.load(
+            audio, _ = librosa.load(
                 audio_path,
                 sr=16000,
                 offset=start,
                 duration=end - start,
                 mono=True,
             )
+            audio = audio.astype(np.float32)
+            if self.preprocessor is not None:
+                audio = self.preprocessor(audio, 16000)
             # Whisper expects float32 numpy array at 16 kHz
             result = self.model.transcribe(
-                audio.astype(np.float32),
+                audio,
                 language=language,
                 task=task,
                 fp16=(self.device != "cpu"),
@@ -108,6 +174,46 @@ class Transcriber:
             # Fallback: transcribe full file (less accurate for bilingual)
             return self._transcribe_file(audio_path, language, task=task)
 
+    def _transcribe_segment_with_segments(
+        self,
+        audio_path: str,
+        start: float,
+        end: float,
+        language: str,
+        task: str = "transcribe",
+    ) -> tuple:
+        """
+        Like _transcribe_segment but also returns Whisper's internal segment list.
+
+        Returns:
+            (text: str, whisper_segments: list[dict])
+            Timestamps in whisper_segments are relative to the sliced audio (0-based),
+            not to the parent file's start offset.
+            Falls back to _transcribe_file_with_segments if librosa is unavailable.
+        """
+        try:
+            import librosa
+
+            audio, _ = librosa.load(
+                audio_path,
+                sr=16000,
+                offset=start,
+                duration=end - start,
+                mono=True,
+            )
+            audio = audio.astype(np.float32)
+            if self.preprocessor is not None:
+                audio = self.preprocessor(audio, 16000)
+            result = self.model.transcribe(
+                audio,
+                language=language,
+                task=task,
+                fp16=(self.device != "cpu"),
+            )
+            return result["text"].strip(), result.get("segments", [])
+        except ImportError:
+            return self._transcribe_file_with_segments(audio_path, language, task=task)
+
     # ------------------------------------------------------------------
     # Bilingual mode: oracle_segments  (original behavior)
     # ------------------------------------------------------------------
@@ -116,12 +222,13 @@ class Transcriber:
         self,
         entry: ManifestEntry,
         task_map: Optional[dict] = None,
+        return_whisper_segments: bool = False,
     ) -> tuple:
         """
         Transcribe a bilingual entry segment-by-segment with oracle language routing.
 
         Each segment is decoded independently with its known language forced.
-        pause_s is NOT used — this mode ignores inter-segment gaps.
+        pause_s is NOT used -- this mode ignores inter-segment gaps.
 
         Args:
             task_map: Per-language Whisper task override.
@@ -129,13 +236,23 @@ class Transcriber:
                 existing behaviour.  For subtitle export pass
                 {"en": "transcribe", "es": "translate"} to get English output
                 from Spanish segments.
+            return_whisper_segments: If True, each dict in segment_outputs will
+                include a "whisper_segments" key containing the raw Whisper
+                internal segment list for that bilingual segment.  Timestamps
+                inside each Whisper segment are relative to that segment's own
+                audio (0-based).  Used by subtitle export for fine-grained cue
+                splitting.  Default False preserves existing behaviour exactly.
 
         Returns:
             (joined_hypothesis: str,
              segment_outputs: list[dict])   # one dict per segment
 
-        segment_outputs schema:
+        segment_outputs schema (return_whisper_segments=False):
             {"position": int, "language": str, "reference": str, "hypothesis": str}
+
+        segment_outputs schema (return_whisper_segments=True):
+            {"position": int, "language": str, "reference": str, "hypothesis": str,
+             "whisper_segments": list[dict]}
         """
         if not entry.segments:
             raise ValueError(
@@ -148,23 +265,38 @@ class Transcriber:
         segment_outputs: list[dict] = []
         for i, seg in enumerate(entry.segments):
             task = task_map.get(seg.language, "transcribe")
+            whisper_segs: list = []
+
             if seg.audio_path:
                 # Bilingual-concat: each segment is its own complete audio file
-                hyp = self._transcribe_file(seg.audio_path, seg.language, task=task)
+                if return_whisper_segments:
+                    hyp, whisper_segs = self._transcribe_file_with_segments(
+                        seg.audio_path, seg.language, task=task
+                    )
+                else:
+                    hyp = self._transcribe_file(seg.audio_path, seg.language, task=task)
             else:
                 # Bilingual-interleaved: segments are time-slices of one file
-                hyp = self._transcribe_segment(
-                    entry.audio_path, seg.start, seg.end, seg.language, task=task
-                )
+                if return_whisper_segments:
+                    hyp, whisper_segs = self._transcribe_segment_with_segments(
+                        entry.audio_path, seg.start, seg.end, seg.language, task=task
+                    )
+                else:
+                    hyp = self._transcribe_segment(
+                        entry.audio_path, seg.start, seg.end, seg.language, task=task
+                    )
+
             parts.append(hyp)
-            segment_outputs.append(
-                {
-                    "position": i,
-                    "language": seg.language,
-                    "reference": seg.transcript,
-                    "hypothesis": hyp,
-                }
-            )
+            out: dict = {
+                "position": i,
+                "language": seg.language,
+                "reference": seg.transcript,
+                "hypothesis": hyp,
+            }
+            if return_whisper_segments:
+                out["whisper_segments"] = whisper_segs
+            segment_outputs.append(out)
+
         return " ".join(parts), segment_outputs
 
     # ------------------------------------------------------------------
@@ -190,7 +322,10 @@ class Transcriber:
                 offset=seg.start,
                 duration=seg.end - seg.start,
             )
-        return audio.astype(np.float32)
+        audio = audio.astype(np.float32)
+        if self.preprocessor is not None:
+            audio = self.preprocessor(audio, sr)
+        return audio
 
     def _transcribe_full_concat(self, entry: ManifestEntry) -> tuple:
         """

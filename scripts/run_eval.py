@@ -1,5 +1,5 @@
 """
-run_eval.py — One-shot evaluation driver: manifest → transcription → metrics.
+run_eval.py -- One-shot evaluation driver: manifest -> transcription -> metrics.
 
 This is the command-line entry point that ties together transcribe + evaluate.
 Useful for running experiments without opening a notebook.
@@ -7,23 +7,30 @@ Useful for running experiments without opening a notebook.
 Examples:
   # Spanish baseline, 50 utterances
   python scripts/run_eval.py \
-      --manifest data/manifests/es_cv_test.jsonl \
+      --manifest data/manifests/es_mls_test.jsonl \
       --model    large-v3 \
-      --tag      es_cv_v1 \
+      --tag      es_mls_raw \
       --max      50
 
-  # Bilingual oracle-segment mode (default, original behaviour)
-  python scripts/run_eval.py \
-      --manifest data/manifests/bilingual_concat.jsonl \
-      --model    large-v3 \
-      --tag      bilingual_v1
-
-  # Bilingual full-concat / A2 mode — pause_s creates real silence gaps
+  # Bilingual oracle-segment mode (default)
   python scripts/run_eval.py \
       --manifest data/manifests/bilingual_es-en_100.jsonl \
       --model    large-v3 \
-      --tag      bilingual_es-en_100_nopause_fc \
+      --tag      bilingual_es-en_100_oracle
+
+  # Bilingual full-concat / A2 mode
+  python scripts/run_eval.py \
+      --manifest       data/manifests/bilingual_es-en_100.jsonl \
+      --model          large-v3 \
+      --tag            a2_es-en_100_nopause_fc \
       --bilingual-mode full_concat
+
+  # Preprocessing ablation: preemphasis on bilingual oracle
+  python scripts/run_eval.py \
+      --manifest   data/manifests/bilingual_es-en_100.jsonl \
+      --model      large-v3 \
+      --tag        bilingual_es-en_100_preemphasis \
+      --preprocess preemphasis
 """
 
 import argparse
@@ -35,6 +42,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from src.asr.transcribe import Transcriber
 from src.asr.evaluate import evaluate_results
+from src.audio.preprocess import get_preprocessor, MODES as PREPROCESS_MODES
 
 
 def main():
@@ -58,6 +66,19 @@ def main():
             "and decode in one Whisper pass (A2 pause-vs-no-pause experiment)."
         ),
     )
+    parser.add_argument(
+        "--preprocess",
+        default="raw",
+        choices=PREPROCESS_MODES,
+        help=(
+            "Audio preprocessing applied before Whisper inference. "
+            "'raw' (default): no preprocessing, baseline behaviour unchanged. "
+            "'normalize': peak amplitude normalization to [-1, 1]. "
+            "'preemphasis': first-order high-pass pre-emphasis filter (coef=0.97). "
+            "Include the condition name in --tag to keep results distinguishable, "
+            "e.g. --tag bilingual_es-en_20_preemphasis."
+        ),
+    )
     args = parser.parse_args()
 
     results_dir = Path("results")
@@ -72,7 +93,14 @@ def main():
     else:
         if results_path.exists():
             print(f"Results file exists at {results_path}. Overwriting...")
-        t = Transcriber(model_size=args.model, device=args.device)
+        preprocessor = get_preprocessor(args.preprocess)
+        if preprocessor is not None:
+            print(f"Preprocessing: {args.preprocess}")
+        t = Transcriber(
+            model_size=args.model,
+            device=args.device,
+            preprocessor=preprocessor,
+        )
         t.transcribe_manifest(
             args.manifest,
             output_path=results_path,

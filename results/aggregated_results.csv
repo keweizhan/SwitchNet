@@ -1,0 +1,6 @@
+tag,n_utterances,overall_wer,overall_mer,sp_wer,sp_mer,sp_n
+preproc_normalize_10,10,0.3467,0.3461,0.48,0.4752,
+preproc_normalize_20,20,0.2647,0.2642,0.395,0.3911,
+preproc_preemphasis_10,10,0.4564,0.4486,0.52,0.5149,
+preproc_raw_10,10,0.3693,0.3605,0.44,0.4314,
+preproc_raw_20,20,0.2837,0.2798,0.375,0.3713,

@@ -16,7 +16,7 @@ Everything is driven by JSONL manifest files, which keeps data preparation, infe
 - Bilingual full-concat decoding: all segments concatenated with optional silence gaps, decoded in one Whisper pass
 - Switch-point WER: WER computed over a word window around each language boundary
 - Controlled experiments: 2-segment order effect (A1), pause vs no-pause (A2), 3-segment arrangement (A3)
-- English subtitle export for bilingual samples (`.srt` output with translate mode for Spanish segments)
+- Subtitle export for bilingual samples: English-only (default) or optional bilingual display mode; `.srt` output; rule-based cue splitting for long cues (V1.2)
 
 ---
 
@@ -27,7 +27,7 @@ SwitchNet/
 +-- scripts/
 |   +-- build_manifests.py    # Build JSONL manifests from raw datasets
 |   +-- run_eval.py           # Main eval driver: transcribe + evaluate in one command
-|   +-- export_subtitles.py   # Export English .srt files for bilingual entries
+|   +-- export_subtitles.py   # Export English or bilingual .srt files for bilingual entries
 |
 +-- src/
 |   +-- asr/
@@ -233,16 +233,35 @@ python scripts/run_eval.py \
 
 Results are written to `results/<tag>.jsonl` (per-utterance hypotheses) and `results/<tag>_summary.json` (aggregate metrics).
 
-### 3. Export English subtitles
+### 3. Export subtitles
 
 ```bash
-# Smoke test: 1 entry, translate ES->EN
+# English subtitles (default): translate ES->EN, one cue per segment
 python scripts/export_subtitles.py \
     --manifest    data/manifests/bilingual_smoke.jsonl \
-    --output-dir  results/subtitles/smoke \
+    --output-dir  results/subtitles/demo_en \
     --model       large-v3 \
     --translate-es \
     --limit       1
+
+# Bilingual mode: Spanish cues show source text on line 1, English translation on line 2
+python scripts/export_subtitles.py \
+    --manifest       data/manifests/bilingual_smoke.jsonl \
+    --output-dir     results/subtitles/demo_bilingual \
+    --model          large-v3 \
+    --translate-es \
+    --subtitle-mode  bilingual \
+    --limit          1
+
+# Bilingual mode with rule-based cue splitting (split cues that exceed 15 words)
+python scripts/export_subtitles.py \
+    --manifest          data/manifests/bilingual_smoke.jsonl \
+    --output-dir        results/subtitles/demo_split \
+    --model             large-v3 \
+    --translate-es \
+    --subtitle-mode     bilingual \
+    --max-words-per-cue 15 \
+    --limit             1
 
 # 5-entry batch validation
 python scripts/export_subtitles.py \
@@ -258,14 +277,6 @@ python scripts/export_subtitles.py \
     --output-dir  results/subtitles/es-en_100 \
     --model       large-v3 \
     --translate-es
-
-# Process a single entry by ID
-python scripts/export_subtitles.py \
-    --manifest    data/manifests/bilingual_smoke.jsonl \
-    --output-dir  results/subtitles/single \
-    --model       large-v3 \
-    --translate-es \
-    --sample-id   bilingual_0000_ls_XXX_mls_es_YYY
 ```
 
 Without `--translate-es`, every segment is transcribed in its source language (useful for debugging the pipeline without caring about English output).
@@ -314,20 +325,52 @@ Overall WER improves in both 3-segment conditions compared to the 2-segment base
 
 ---
 
-## English Subtitle Export
+## Subtitle Export (V1.2)
 
-`scripts/export_subtitles.py` adds English subtitle generation on top of the existing bilingual pipeline.
+`scripts/export_subtitles.py` produces `.srt` subtitle files for bilingual manifest entries.
 
-How it works:
+**How it works:**
 - Loads a bilingual manifest and filters for `language="bilingual"` entries
-- Calls `_transcribe_bilingual_oracle` with a per-language task map
-- English segments: `task="transcribe"` (output is English as-is)
-- Spanish segments: `task="translate"` when `--translate-es` is set (Whisper translates to English)
-- Timing is taken from `segment.start`/`segment.end` if available; otherwise inferred from the audio file duration via librosa
-- Cue timestamps are built cumulatively, respecting `pause_s` gaps between segments
-- Light text cleanup is applied before writing: whitespace normalization, first-character capitalization, period appended if no terminal punctuation present
+- Runs oracle-segment transcription: each segment decoded separately with its known language
+- English segments: `task="transcribe"` — output is English as-is
+- Spanish segments: `task="translate"` when `--translate-es` is set — Whisper translates to English
+- Timing is taken from `segment.start`/`segment.end` when populated; otherwise inferred from audio file duration via librosa
+- Cue timestamps are built cumulatively, respecting `pause_s` gaps, so timestamps remain monotonic
+- Light text cleanup before writing: whitespace normalization, first-character capitalization, terminal period added if absent
 
-This is a **segment-level, manifest-aware** subtitle export. It is not free-form code-switch subtitle generation -- it relies on the manifest knowing where each language segment begins and ends. The output quality is bounded by Whisper's translate accuracy, which can produce translation errors on short or ambiguous segments.
+**Display modes:**
+
+| Mode | What you get |
+|---|---|
+| `--subtitle-mode english` (default) | One English line per cue for all segments |
+| `--subtitle-mode bilingual` | Spanish cues: source text on line 1, English translation on line 2 |
+
+**Rule-based cue splitting (V1.2):**
+
+Pass `--max-words-per-cue N` (or `--max-chars-per-cue N`) to split long cues into shorter sub-cues. The splitter tries boundaries in order: sentence-ending punctuation → clause marks → word-count midpoint. The midpoint fallback avoids ending a chunk on short function words (the, a, to, of, etc.) where possible.
+
+Sub-cue durations are distributed proportionally by word count. Only the final sub-cue of a split may receive an appended period; intermediate sub-cues are left without added terminal punctuation.
+
+If a cue is split, source text is not propagated to sub-cues (it cannot be reliably partitioned), so split bilingual cues fall back to English-only display.
+
+**Example output (English mode, one entry):**
+
+```
+1
+00:00:00,000 --> 00:00:03,325
+You can begin by carrying a rod.
+
+2
+00:00:03,325 --> 00:00:08,657
+After having drunk I masked a little tobacco.
+```
+
+**Limitations:**
+
+- This is segment-level, manifest-aware subtitle export. It is not free-form code-switch subtitle generation — it relies on the manifest knowing where each language segment begins and ends.
+- Bilingual display is most reliable on unsplit cues. Split cues always show English only.
+- Split point quality improves on longer cues with natural punctuation. Short cues with no punctuation and many function words may still produce awkward splits.
+- Translation quality is bounded by Whisper's `task="translate"` accuracy, which can produce wrong output on short or acoustically ambiguous segments.
 
 ---
 
@@ -343,6 +386,8 @@ This is a **segment-level, manifest-aware** subtitle export. It is not free-form
 
 - **Translation quality.** Whisper's `task="translate"` works reasonably for full sentences but can produce noticeably wrong output on short segments or segments with unusual vocabulary. The subtitle output for translated Spanish segments should be treated as a rough English rendering, not a reliable translation.
 
+- **Subtitle export is manifest-aware, not automatic.** The pipeline knows segment boundaries from the manifest. It does not detect code-switching automatically from raw audio. Bilingual display mode is strongest on unsplit cues; rule-based splitting improves readability but does not guarantee clean phrase boundaries.
+
 - **This is research/development tooling.** There is no error recovery, no resume-from-checkpoint, and no production-facing interface. If a single entry errors during a long run, the script logs the error and continues -- the results file will have a blank hypothesis for that entry.
 
 ---
@@ -350,6 +395,5 @@ This is a **segment-level, manifest-aware** subtitle export. It is not free-form
 ## Future Work
 
 - **Preprocessing ablations.** Test denoising or normalization before feeding Whisper, especially for the full-concat path where there is no language forcing.
-- **Subtitle cue splitting.** Currently one oracle segment = one subtitle cue. Long segments (10+ seconds) produce unwieldy cue text. Using Whisper's word-level timestamps to split long segments into shorter cues would improve readability.
-- **Timestamp refinement.** Current cue timing comes from audio file durations. Per-word timestamps from Whisper's output (`result["segments"]`) would give tighter alignment.
+- **Timestamp refinement.** Current cue timing comes from audio file durations or inferred segment lengths. Per-word timestamps from Whisper's output (`result["segments"]`) would give tighter alignment, especially after rule-based splitting.
 - **Natural code-switching data.** The synthetic concatenation approach is a useful proxy but not the same as real code-switched speech. Evaluation on an actual CS corpus (e.g., Miami Bangor, SEAME) would be a meaningful next step.
