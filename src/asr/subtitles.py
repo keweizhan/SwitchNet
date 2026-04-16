@@ -613,3 +613,239 @@ def build_segment_level_cues(
             cursor += seg.pause_s
 
     return cues
+
+
+# ---------------------------------------------------------------------------
+# Reference output helpers  (no model required — use manifest ground truth)
+# ---------------------------------------------------------------------------
+
+def _parse_srt_texts(srt_path: Path) -> List[str]:
+    """
+    Parse an SRT file into a flat list of cue text strings.
+    Returns [] if the file does not exist or cannot be parsed.
+    """
+    try:
+        raw = Path(srt_path).read_text(encoding="utf-8")
+    except OSError:
+        return []
+    texts: List[str] = []
+    for block in re.split(r"\n{2,}", raw.strip()):
+        lines = block.strip().splitlines()
+        if len(lines) < 3 or "-->" not in lines[1]:
+            continue
+        texts.append("\n".join(lines[2:]).strip())
+    return texts
+
+
+def write_reference_srt(
+    segments,
+    output_path: str | Path,
+    switch_marker: bool = True,
+    max_chars_per_line: int = 42,
+) -> None:
+    """
+    Write a reference SRT from manifest segments without running any model.
+
+    Uses the ground-truth transcript from each Segment object.  If
+    switch_marker=True, a brief [ES→EN] boundary cue is inserted at every
+    language transition to make the switch point visually explicit in the SRT.
+
+    Timing is taken from segment.start/end when non-zero, otherwise inferred
+    from the segment's audio file via librosa.
+
+    Args:
+        segments:           List[Segment] from ManifestEntry.segments.
+        output_path:        Destination .srt file path.
+        switch_marker:      Insert a 0.3 s boundary cue at each language switch.
+        max_chars_per_line: Line-wrap limit (default 42).
+    """
+    output_path = Path(output_path)
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+
+    cues: List[SubtitleCue] = []
+    cursor = 0.0
+    prev_lang: Optional[str] = None
+
+    for seg in segments:
+        # Determine duration
+        if seg.end > seg.start:
+            duration = seg.end - seg.start
+        else:
+            inferred = _get_audio_duration(seg.audio_path) if seg.audio_path else None
+            duration = inferred if (inferred and inferred > 0) else 1.0
+
+        lang = seg.language
+
+        # Insert switch-boundary marker cue when language changes
+        if switch_marker and prev_lang is not None and lang != prev_lang:
+            marker_dur = min(0.3, duration * 0.1)
+            cues.append(SubtitleCue(
+                start=round(cursor, 3),
+                end=round(cursor + marker_dur, 3),
+                text=f"[{prev_lang.upper()}\u2192{lang.upper()}]",
+                source_language=None,
+                timing_source="reference_marker",
+            ))
+            cursor += marker_dur
+
+        cues.append(SubtitleCue(
+            start=round(cursor, 3),
+            end=round(cursor + duration, 3),
+            text=seg.transcript,
+            source_language=lang,
+            timing_source="reference",
+        ))
+        cursor += duration
+        if hasattr(seg, "pause_s") and seg.pause_s > 0:
+            cursor += seg.pause_s
+        prev_lang = lang
+
+    write_srt(cues, output_path, add_period=False,
+              max_chars_per_line=max_chars_per_line, subtitle_mode="english")
+
+
+def write_reference_txt(segments, output_path: str | Path) -> None:
+    """
+    Write a plain-text reference file with explicit switch-point labeling.
+
+    Output format::
+
+        [ES]  por dar las señas de la taberna...
+
+        ─── ES→EN SWITCH ───
+
+        [EN]  AFTER AN APPRENTICESHIP ON A MERCHANT SHIP...
+
+    Args:
+        segments:    List[Segment] from ManifestEntry.segments.
+        output_path: Destination .txt file path.
+    """
+    output_path = Path(output_path)
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+
+    lines: List[str] = []
+    prev_lang: Optional[str] = None
+
+    for seg in segments:
+        lang = seg.language
+        if prev_lang is not None and lang != prev_lang:
+            lines.append("")
+            lines.append(
+                f"\u2500\u2500\u2500 {prev_lang.upper()}\u2192{lang.upper()} SWITCH \u2500\u2500\u2500"
+            )
+            lines.append("")
+        lines.append(f"[{lang.upper()}]  {seg.transcript}")
+        prev_lang = lang
+
+    with open(output_path, "w", encoding="utf-8") as fh:
+        fh.write("\n".join(lines) + "\n")
+
+
+def write_comparison_md(
+    entry_id: str,
+    output_path: str | Path,
+    segments,
+    srt_map: dict,
+    manifest_path: Optional[str] = None,
+) -> None:
+    """
+    Write a markdown comparison document for one bilingual demo case.
+
+    Always includes the reference ground truth split by language segment.
+    Reads any available model SRT files (Whisper, WhisperX) to include their
+    output in the comparison table.
+
+    Args:
+        entry_id:      ManifestEntry.id — used for heading and code snippets.
+        output_path:   Destination comparison.md path.
+        segments:      List[Segment] from ManifestEntry (for reference text).
+        srt_map:       Dict mapping model label -> Path|None, e.g.
+                       {'Whisper': Path('whisper.srt'), 'WhisperX': None}.
+        manifest_path: Optional source manifest path shown in the
+                       'how to generate' code block.
+    """
+    output_path = Path(output_path)
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    out_dir = output_path.parent
+
+    def _trunc(s: str, n: int = 140) -> str:
+        return s if len(s) <= n else s[:n] + "\u2026"
+
+    def _srt_full_text(label: str) -> str:
+        p = srt_map.get(label)
+        if p is None or not Path(p).exists():
+            return "_not available_"
+        texts = _parse_srt_texts(Path(p))
+        # Filter out switch-marker cues like [ES→EN]
+        texts = [t for t in texts if not re.match(r"^\[.{2}\u2192.{2}\]$", t)]
+        return _trunc(" / ".join(texts)) if texts else "_empty_"
+
+    # Compute approximate switch time using audio durations
+    switch_time: Optional[float] = None
+    cursor = 0.0
+    prev_lang_: Optional[str] = None
+    for seg in segments:
+        dur = (seg.end - seg.start) if seg.end > seg.start else (
+            (_get_audio_duration(seg.audio_path) or 1.0) if seg.audio_path else 1.0
+        )
+        if prev_lang_ is not None and seg.language != prev_lang_ and switch_time is None:
+            switch_time = round(cursor, 1)
+        cursor += dur
+        prev_lang_ = seg.language
+
+    md: List[str] = []
+    md.append(f"# Switch-Point Demo: `{entry_id}`\n")
+
+    # ── Reference ground truth ────────────────────────────────────────────────
+    md.append("## Reference Ground Truth\n")
+    for i, seg in enumerate(segments):
+        md.append(f"**[{seg.language.upper()}]**  ")
+        md.append(f"{seg.transcript}\n")
+        if i + 1 < len(segments) and segments[i + 1].language != seg.language:
+            sw_label = f"{seg.language.upper()}\u2192{segments[i+1].language.upper()}"
+            switch_note = f" at ~{switch_time:.1f}s" if switch_time is not None else ""
+            md.append(f"**\u2500\u2500\u2500 {sw_label} SWITCH{switch_note} \u2500\u2500\u2500**\n")
+
+    # ── Model outputs table ───────────────────────────────────────────────────
+    md.append("---\n")
+    md.append("## Model Outputs\n")
+    md.append("| Model | Transcript (condensed) |")
+    md.append("|---|---|")
+    ref_text = _trunc(" / ".join(seg.transcript for seg in segments))
+    md.append(f"| **Reference** | {ref_text} |")
+    for label in srt_map:
+        md.append(f"| **{label}** | {_srt_full_text(label)} |")
+
+    # ── File status ───────────────────────────────────────────────────────────
+    md.append("\n---\n")
+    md.append("## Files in This Directory\n")
+    md.append("| File | Status |")
+    md.append("|---|---|")
+    for fname in ("reference.srt", "reference.txt"):
+        tick = "\u2713" if (out_dir / fname).exists() else "\u2717"
+        md.append(f"| `{fname}` | {tick} |")
+    for label, path in srt_map.items():
+        fname = label.lower() + ".srt"
+        tick = "\u2713" if (path and Path(path).exists()) else "\u2717 not available"
+        md.append(f"| `{fname}` | {tick} |")
+    md.append("| `comparison.md` | \u2713 (this file) |")
+
+    # ── How to generate whisper.srt ───────────────────────────────────────────
+    if not (srt_map.get("Whisper") and Path(srt_map["Whisper"]).exists()):
+        mfest = manifest_path or "data/manifests/bilingual_es-en_50.jsonl"
+        md.append("\n---\n")
+        md.append("## Generate `whisper.srt`\n")
+        md.append("```bash")
+        md.append("python scripts/export_subtitles.py \\")
+        md.append(f"    --manifest   {mfest} \\")
+        md.append(f"    --sample-id  {entry_id} \\")
+        md.append(f"    --output-dir {out_dir} \\")
+        md.append( "    --model      large-v3 \\")
+        md.append( "    --translate-es \\")
+        md.append( "    --subtitle-mode bilingual")
+        md.append(f"# rename: mv \"{out_dir / entry_id}.srt\" \"{out_dir / 'whisper.srt'}\"")
+        md.append("```")
+
+    md.append("")
+    with open(output_path, "w", encoding="utf-8") as fh:
+        fh.write("\n".join(md))
