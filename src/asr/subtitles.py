@@ -776,8 +776,9 @@ def write_comparison_md(
         if p is None or not Path(p).exists():
             return "_not available_"
         texts = _parse_srt_texts(Path(p))
-        # Filter out switch-marker cues like [ES→EN]
-        texts = [t for t in texts if not re.match(r"^\[.{2}\u2192.{2}\]$", t)]
+        # Filter out switch-marker cues like [ES→EN] and collapse internal newlines
+        texts = [t.replace("\n", " ") for t in texts
+                 if not re.match(r"^\[.{2}\u2192.{2}\]$", t)]
         return _trunc(" / ".join(texts)) if texts else "_empty_"
 
     # Compute approximate switch time using audio durations
