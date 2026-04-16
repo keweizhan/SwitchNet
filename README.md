@@ -30,6 +30,7 @@ SwitchNet/
 |   +-- export_subtitles.py   # Export English or bilingual .srt files for bilingual entries
 |   +-- aggregate_results.py  # Collect all *_summary.json files into one CSV table
 |   +-- make_core_results.py  # Produce curated core-results table for paper (hardcodes experiment list)
+|   +-- run_eval_whisperx.py  # Same as run_eval.py but uses WhisperX backend (optional, pip install whisperx)
 |
 +-- src/
 |   +-- asr/
