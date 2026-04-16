@@ -31,6 +31,7 @@ SwitchNet/
 |   +-- aggregate_results.py  # Collect all *_summary.json files into one CSV table
 |   +-- make_core_results.py  # Produce curated core-results table for paper (hardcodes experiment list)
 |   +-- run_eval_whisperx.py  # Same as run_eval.py but uses WhisperX backend (optional, pip install whisperx)
+|   +-- run_demo_subtitles.py # Run three predefined subtitle demo cases; output to results/demo_cases/
 |
 +-- src/
 |   +-- asr/
@@ -283,6 +284,18 @@ python scripts/export_subtitles.py \
 ```
 
 Without `--translate-es`, every segment is transcribed in its source language (useful for debugging the pipeline without caring about English output).
+
+**Quick demo (three modes, one command):**
+
+```bash
+# Preview what will run:
+python scripts/run_demo_subtitles.py --dry-run
+
+# Run all three demo cases on the smoke manifest (1 bilingual entry):
+python scripts/run_demo_subtitles.py
+
+# Output goes to results/demo_cases/demo_en_only/, demo_bilingual/, demo_bilingual_split/
+```
 
 Output per entry: one `<id>.srt` + one `<id>.json` sidecar with per-segment hypotheses and cue timing.
 
