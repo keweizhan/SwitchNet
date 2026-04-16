@@ -41,6 +41,7 @@ DEFAULT_OUTPUT = RESULTS_DIR / "aggregated_results.csv"
 
 FIELDNAMES = [
     "tag",
+    "backend",
     "n_utterances",
     "overall_wer",
     "overall_mer",
@@ -71,13 +72,17 @@ def load_summary(path: Path) -> dict:
             data = json.load(f)
     except Exception as e:
         print(f"  WARNING: could not parse {path.name}: {e}", file=sys.stderr)
-        return {"tag": tag, "n_utterances": "", "overall_wer": "", "overall_mer": "",
+        backend = "whisperx" if tag.startswith("wx_") else "whisper"
+        return {"tag": tag, "backend": backend, "n_utterances": "",
+                "overall_wer": "", "overall_mer": "",
                 "sp_wer": "", "sp_mer": "", "sp_n": ""}
 
     sp = data.get("switch_point") or {}
+    backend = "whisperx" if tag.startswith("wx_") else "whisper"
 
     return {
         "tag":          tag,
+        "backend":      backend,
         "n_utterances": _safe(data, "overall", "n_utterances"),
         "overall_wer":  _safe(data, "overall", "wer"),
         "overall_mer":  _safe(data, "overall", "mer"),
@@ -152,16 +157,18 @@ def main():
 
     # Print a quick preview table
     col_w = {
-        "tag": max(len(r["tag"]) for r in rows),
+        "tag":          max(len(r["tag"]) for r in rows),
+        "backend":      8,
         "n_utterances": 4,
-        "overall_wer": 11,
-        "overall_mer": 11,
-        "sp_wer": 8,
-        "sp_mer": 8,
-        "sp_n": 6,
+        "overall_wer":  11,
+        "overall_mer":  11,
+        "sp_wer":       8,
+        "sp_mer":       8,
+        "sp_n":         6,
     }
     header = (
         f"{'tag':<{col_w['tag']}}  "
+        f"{'backend':<{col_w['backend']}}  "
         f"{'n':>{col_w['n_utterances']}}  "
         f"{'overall_wer':>{col_w['overall_wer']}}  "
         f"{'overall_mer':>{col_w['overall_mer']}}  "
@@ -185,6 +192,7 @@ def main():
 
         print(
             f"{r['tag']:<{col_w['tag']}}  "
+            f"{r['backend']:<{col_w['backend']}}  "
             f"{fmt(r['n_utterances'], col_w['n_utterances'])}  "
             f"{fmt(r['overall_wer'],  col_w['overall_wer'],  True)}  "
             f"{fmt(r['overall_mer'],  col_w['overall_mer'],  True)}  "

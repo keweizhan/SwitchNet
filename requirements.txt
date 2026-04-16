@@ -4,6 +4,10 @@ numpy
 librosa
 jiwer
 
+# Optional: plotting (scripts/plot_results.py)
+#   pip install matplotlib
+# matplotlib
+
 # Optional: WhisperX backend (scripts/run_eval_whisperx.py)
 # Install separately — requires torch with CUDA for GPU use:
 #   pip install whisperx

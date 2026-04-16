@@ -32,6 +32,7 @@ SwitchNet/
 |   +-- make_core_results.py  # Produce curated core-results table for paper (hardcodes experiment list)
 |   +-- run_eval_whisperx.py  # Same as run_eval.py but uses WhisperX backend (optional, pip install whisperx)
 |   +-- run_demo_subtitles.py # Run three predefined subtitle demo cases; output to results/demo_cases/
+|   +-- plot_results.py      # Generate WER comparison plots from aggregated_results.csv (requires matplotlib)
 |
 +-- src/
 |   +-- asr/
