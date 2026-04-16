@@ -28,6 +28,8 @@ SwitchNet/
 |   +-- build_manifests.py    # Build JSONL manifests from raw datasets
 |   +-- run_eval.py           # Main eval driver: transcribe + evaluate in one command
 |   +-- export_subtitles.py   # Export English or bilingual .srt files for bilingual entries
+|   +-- aggregate_results.py  # Collect all *_summary.json files into one CSV table
+|   +-- make_core_results.py  # Produce curated core-results table for paper (hardcodes experiment list)
 |
 +-- src/
 |   +-- asr/
