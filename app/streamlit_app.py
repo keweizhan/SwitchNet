@@ -145,6 +145,16 @@ st.markdown(
         font-weight: 700;
         letter-spacing: 0.08em;
     }
+    .comparison-note {
+        margin: 0 0 10px;
+        padding: 8px 10px;
+        border-radius: 10px;
+        border: 1px solid rgba(245, 158, 11, 0.35);
+        background: rgba(120, 80, 18, 0.22);
+        color: #fde68a;
+        font-size: 0.82rem;
+        line-height: 1.4;
+    }
     </style>
     """,
     unsafe_allow_html=True,
@@ -315,6 +325,27 @@ def _lang_badge(lang: Optional[str]) -> str:
 def _transcript_card_html(text: str, lang: Optional[str]) -> str:
     lang_class = "es" if lang == "es" else "en"
     return f'<div class="transcript-card {lang_class}">{text or "(no transcript)"}</div>'
+
+
+def _comparison_note_html(text: str) -> str:
+    return f'<div class="comparison-note">{text}</div>'
+
+
+def _overgeneration_note(seg_outputs: Optional[List[dict]], backend_label: str) -> Optional[str]:
+    if not seg_outputs:
+        return None
+
+    for out in seg_outputs:
+        ref_words = len((out.get("reference") or "").split())
+        hyp_words = len((out.get("hypothesis") or "").split())
+        if ref_words < 8:
+            continue
+        if hyp_words >= ref_words + 18 and hyp_words >= int(ref_words * 1.45):
+            return (
+                f"Possible boundary over-generation. Stored {backend_label} output "
+                "continues beyond reference; this is a model behavior, not a UI artifact."
+            )
+    return None
 
 
 def _cue_rows_html(cues: List[SubtitleCue], switch_time: Optional[float]) -> str:
@@ -513,6 +544,10 @@ with tab_cmp:
     )
 
     ref_cues = _reference_cues_cached(entry.id, manifest_path)
+    w_records  = _load_jsonl(whisper_path)  if whisper_path  else {}
+    wx_records = _load_jsonl(whisperx_path) if whisperx_path else {}
+    w_rec  = w_records.get(entry.id)
+    wx_rec = wx_records.get(entry.id)
 
     col_ref, col_w, col_wx = st.columns(3)
 
@@ -525,6 +560,9 @@ with tab_cmp:
         if whisper_path:
             w_cues = _model_cues_cached(entry.id, manifest_path, whisper_path)
             if w_cues:
+                note = _overgeneration_note(w_rec.get("segment_outputs") if w_rec else None, "Whisper")
+                if note:
+                    st.markdown(_comparison_note_html(note), unsafe_allow_html=True)
                 st.markdown(_cue_rows_html(w_cues, sw_time), unsafe_allow_html=True)
                 if wer_whisper is not None:
                     st.caption(f"WER = **{wer_whisper:.1%}**")
@@ -538,6 +576,9 @@ with tab_cmp:
         if whisperx_path:
             wx_cues = _model_cues_cached(entry.id, manifest_path, whisperx_path)
             if wx_cues:
+                note = _overgeneration_note(wx_rec.get("segment_outputs") if wx_rec else None, "WhisperX")
+                if note:
+                    st.markdown(_comparison_note_html(note), unsafe_allow_html=True)
                 st.markdown(_cue_rows_html(wx_cues, sw_time), unsafe_allow_html=True)
                 if wer_whisperx is not None:
                     st.caption(f"WER = **{wer_whisperx:.1%}**")
@@ -547,11 +588,6 @@ with tab_cmp:
             st.caption("_(no WhisperX JSONL selected)_")
 
     # ── per-segment text expanders ────────────────────────────────────────────
-    w_records  = _load_jsonl(whisper_path)  if whisper_path  else {}
-    wx_records = _load_jsonl(whisperx_path) if whisperx_path else {}
-    w_rec  = w_records.get(entry.id)
-    wx_rec = wx_records.get(entry.id)
-
     if w_rec or wx_rec:
         st.divider()
         st.subheader("Per-segment hypothesis text")
