@@ -846,7 +846,6 @@ with tab_live:
         live_duration = _audio_duration_from_bytes(live_audio_bytes) if live_audio_bytes else None
 
         if live_audio_bytes:
-            st.audio(live_audio_bytes, format="audio/wav")
             if live_duration is not None:
                 st.caption(f"Recording duration: **{live_duration:.1f}s**")
         else:
