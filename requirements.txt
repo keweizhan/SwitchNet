@@ -1,14 +1,18 @@
+# Core ASR and evaluation
 openai-whisper
 torch
 numpy
 librosa
+soundfile
 jiwer
 
-# Optional: plotting (scripts/plot_results.py)
-#   pip install matplotlib
-# matplotlib
+# Streamlit demo app
+streamlit
+pandas
+
+# Plotting (scripts/plot_results.py, demo notebook)
+matplotlib
 
 # Optional: WhisperX backend (scripts/run_eval_whisperx.py)
-# Install separately — requires torch with CUDA for GPU use:
+# Requires a working PyTorch + CUDA environment; install separately:
 #   pip install whisperx
-# whisperx
