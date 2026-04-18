@@ -1,0 +1,36 @@
+{
+  "overall": {
+    "wer": 0.3659,
+    "mer": 0.3659,
+    "n_utterances": 1
+  },
+  "per_language": {
+    "bilingual": {
+      "wer": 0.3659,
+      "mer": 0.3659,
+      "n": 1
+    }
+  },
+  "per_entry": [
+    {
+      "wer": 0.3659,
+      "mer": 0.3659,
+      "substitutions": 3,
+      "deletions": 12,
+      "insertions": 0,
+      "ref_words": 41,
+      "hyp_words": 29,
+      "id": "bilingual_es-en_0000_mls_es_8585_9503_000061_ls_4970-29093-0015",
+      "language": "bilingual"
+    }
+  ],
+  "per_segment_language": null,
+  "per_position": null,
+  "per_language_position": null,
+  "switch_point": {
+    "wer": 0.6,
+    "mer": 0.6,
+    "window_words": 5,
+    "n_windows": 1
+  }
+}

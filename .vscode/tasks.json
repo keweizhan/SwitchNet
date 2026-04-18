@@ -1,0 +1,99 @@
+{
+    "version": "2.0.0",
+    "tasks": [
+        {
+            "label": "SwitchNet: Run Evaluation",
+            "type": "shell",
+            "command": "python",
+            "args": [
+                "scripts/run_eval.py",
+                "--manifest", "${input:manifest}",
+                "--model",    "${input:modelSize}",
+                "--tag",      "${input:tag}",
+                "--bilingual-mode", "${input:bilingualMode}"
+            ],
+            "problemMatcher": [],
+            "presentation": {
+                "reveal": "always",
+                "panel": "new",
+                "focus": true,
+                "clear": true
+            },
+            "group": {
+                "kind": "build",
+                "isDefault": true
+            }
+        },
+        {
+            "label": "SwitchNet: Export Subtitles",
+            "type": "shell",
+            "command": "python",
+            "args": [
+                "scripts/export_subtitles.py",
+                "--manifest",      "${input:manifest}",
+                "--output-dir",    "${input:outputDir}",
+                "--model",         "${input:modelSize}",
+                "--translate-es",
+                "--subtitle-mode", "bilingual"
+            ],
+            "problemMatcher": [],
+            "presentation": {
+                "reveal": "always",
+                "panel": "new",
+                "focus": true,
+                "clear": true
+            },
+            "group": "build"
+        },
+        {
+            "label": "SwitchNet: Aggregate Results",
+            "type": "shell",
+            "command": "python",
+            "args": [
+                "scripts/aggregate_results.py"
+            ],
+            "problemMatcher": [],
+            "presentation": {
+                "reveal": "always",
+                "panel": "new",
+                "focus": true,
+                "clear": true
+            },
+            "group": "build"
+        }
+    ],
+    "inputs": [
+        {
+            "id": "manifest",
+            "type": "promptString",
+            "description": "Path to manifest JSONL (e.g. data/manifests/bilingual_es-en_100.jsonl)",
+            "default": "data/manifests/bilingual_smoke.jsonl"
+        },
+        {
+            "id": "tag",
+            "type": "promptString",
+            "description": "Output tag (used as results/<tag>.jsonl)",
+            "default": "my_run"
+        },
+        {
+            "id": "modelSize",
+            "type": "pickString",
+            "description": "Whisper model size",
+            "options": ["tiny", "base", "small", "medium", "large-v2", "large-v3"],
+            "default": "large-v3"
+        },
+        {
+            "id": "bilingualMode",
+            "type": "pickString",
+            "description": "Bilingual decoding mode",
+            "options": ["oracle_segments", "full_concat"],
+            "default": "oracle_segments"
+        },
+        {
+            "id": "outputDir",
+            "type": "promptString",
+            "description": "Output directory for subtitle files",
+            "default": "results/subtitles/demo"
+        }
+    ]
+}

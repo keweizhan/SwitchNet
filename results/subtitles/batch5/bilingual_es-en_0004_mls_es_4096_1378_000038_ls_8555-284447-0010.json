@@ -1,0 +1,38 @@
+{
+  "id": "bilingual_es-en_0004_mls_es_4096_1378_000038_ls_8555-284447-0010",
+  "bilingual_mode": "oracle_segments",
+  "task_map": {
+    "en": "transcribe",
+    "es": "translate"
+  },
+  "segments": [
+    {
+      "position": 0,
+      "language": "es",
+      "reference": "llegaron volvieron a subir amo y mozo y sin volver a despedirse de la arcadia fingida o contrahecha y con más vergüenza que gusto siguieron su camino fin del capítulo cincuenta y ocho",
+      "hypothesis": "They arrived, they went up again to Moimozo, and without saying goodbye to the faked or counterfeit Arcadia, and with more shame than pleasure, they followed their path. End of chapter 58"
+    },
+    {
+      "position": 1,
+      "language": "en",
+      "reference": "CONTROL YOURSELVES MY DEARS REPLIED THE BOOLOOROO THE WORST PUNISHMENT I KNOW HOW TO INFLICT ON ANYONE THIS PRISONER IS ABOUT TO SUFFER YOU'LL SEE A VERY PRETTY PATCHING MY ROYAL DAUGHTERS",
+      "hypothesis": "control yourselves my dears replied the boolaroo the worst punishment i know how to inflict on any one this prisoner is about to suffer you will see a very pretty patching my royal daughters"
+    }
+  ],
+  "cues": [
+    {
+      "index": 1,
+      "start": 0.0,
+      "end": 19.756,
+      "text": "They arrived, they went up again to Moimozo, and without saying goodbye to the faked or counterfeit Arcadia, and with more shame than pleasure, they followed their path. End of chapter 58",
+      "source_language": "es"
+    },
+    {
+      "index": 2,
+      "start": 19.756,
+      "end": 32.686,
+      "text": "control yourselves my dears replied the boolaroo the worst punishment i know how to inflict on any one this prisoner is about to suffer you will see a very pretty patching my royal daughters",
+      "source_language": "en"
+    }
+  ]
+}

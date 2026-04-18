@@ -1,0 +1,38 @@
+{
+  "id": "bilingual_es-en_0003_mls_es_8585_7405_000006_ls_121-127105-0034",
+  "bilingual_mode": "oracle_segments",
+  "task_map": {
+    "en": "transcribe",
+    "es": "translate"
+  },
+  "segments": [
+    {
+      "position": 0,
+      "language": "es",
+      "reference": "y dónde iremos preguntó damián donde haya en qué ganar un trozo de pan le dijo su padre iremos juntos interrogó cosme como queráis les contestaron",
+      "hypothesis": "and where are we going? asked damián where are we going to earn a piece of bread? said his father we are going together? asked cosme as you wish they answered"
+    },
+    {
+      "position": 1,
+      "language": "en",
+      "reference": "IT SOUNDED DULL IT SOUNDED STRANGE AND ALL THE MORE SO BECAUSE OF HIS MAIN CONDITION WHICH WAS",
+      "hypothesis": "It sounded dull, but sounded strange, and all the more so because of his main condition, which was—"
+    }
+  ],
+  "cues": [
+    {
+      "index": 1,
+      "start": 0.0,
+      "end": 15.27,
+      "text": "and where are we going? asked damián where are we going to earn a piece of bread? said his father we are going together? asked cosme as you wish they answered",
+      "source_language": "es"
+    },
+    {
+      "index": 2,
+      "start": 15.27,
+      "end": 22.68,
+      "text": "It sounded dull, but sounded strange, and all the more so because of his main condition, which was—",
+      "source_language": "en"
+    }
+  ]
+}

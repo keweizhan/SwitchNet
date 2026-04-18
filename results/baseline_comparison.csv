@@ -1,0 +1,7 @@
+condition,backend,n,wer,mer,sp_wer,sp_mer,tag
+EN,whisper,50,0.0205,0.0204,,,en_librispeech_50_large_cpu
+EN,whisperx,50,0.0133,0.0133,,,wx_en_librispeech_50_large_cpu
+ES,whisper,50,0.1354,0.1341,,,es_mls_50_large_cpu
+ES,whisperx,50,0.0362,0.0362,,,wx_es_mls_50_large_cpu
+Bilingual,whisper,50,0.054,0.0528,0.112,0.1098,bilingual_es-en_50_large_cpu
+Bilingual,whisperx,50,0.0356,0.0354,0.094,0.0907,wx_bilingual_es-en_50_large_cpu

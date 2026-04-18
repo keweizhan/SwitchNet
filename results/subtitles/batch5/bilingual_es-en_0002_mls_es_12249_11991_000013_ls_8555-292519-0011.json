@@ -1,0 +1,38 @@
+{
+  "id": "bilingual_es-en_0002_mls_es_12249_11991_000013_ls_8555-292519-0011",
+  "bilingual_mode": "oracle_segments",
+  "task_map": {
+    "en": "transcribe",
+    "es": "translate"
+  },
+  "segments": [
+    {
+      "position": 0,
+      "language": "es",
+      "reference": "con su cima pintoresca de escarpadas rocas que se extiende por el este de la ciudad son panoramas que ávidamente busca el extranjero",
+      "hypothesis": "with its top painted with carved rocks that extends east of the city are panoramas that the foreigner avidly seeks"
+    },
+    {
+      "position": 1,
+      "language": "en",
+      "reference": "HE HAD GOT INTO HER COURTYARD",
+      "hypothesis": "He had got into her courtyard."
+    }
+  ],
+  "cues": [
+    {
+      "index": 1,
+      "start": 0.0,
+      "end": 11.68,
+      "text": "with its top painted with carved rocks that extends east of the city are panoramas that the foreigner avidly seeks",
+      "source_language": "es"
+    },
+    {
+      "index": 2,
+      "start": 11.68,
+      "end": 14.76,
+      "text": "He had got into her courtyard.",
+      "source_language": "en"
+    }
+  ]
+}

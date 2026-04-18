@@ -1,0 +1,9 @@
+timestamp: 2026-02-17T12:10:54
+dir: data/LibriSpeech/test-clean/61/70968
+model: base
+max_requested: 100
+total_seen: 63
+scored: 63
+skipped_no_ref: 0
+avg_wer: 0.11816691978639365
+approx_word_accuracy(1-wer): 0.882
