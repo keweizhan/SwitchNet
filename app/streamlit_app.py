@@ -172,6 +172,36 @@ def _load_manifest_cached(path: str) -> List[ManifestEntry]:
     return load_manifest(path)
 
 
+# Repo root — used for cross-platform audio path resolution.
+_REPO_ROOT = Path(__file__).resolve().parent.parent
+
+
+def resolve_audio_path(path_str: str) -> Path:
+    """Return a Path that exists on the current machine.
+
+    Manifests store absolute Windows paths (e.g. F:\\EE519\\...\\data\\...).
+    On another OS those paths don't exist, but the relative part after the
+    first 'data/' segment is stable.  We try:
+      1. The stored path as-is.
+      2. _REPO_ROOT / <relative-part-starting-at-'data/'>.
+    Returns the first existing Path, or the original Path if neither exists
+    (caller should check .exists() and degrade gracefully).
+    """
+    p = Path(path_str)
+    if p.exists():
+        return p
+    # Normalise separators and find the 'data/' anchor
+    norm = path_str.replace("\\", "/")
+    marker = "data/"
+    idx = norm.find(marker)
+    if idx != -1:
+        rel = norm[idx:]          # e.g. "data/mls_spanish/test/audio/..."
+        candidate = _REPO_ROOT / rel
+        if candidate.exists():
+            return candidate
+    return p  # not found; caller handles gracefully
+
+
 @st.cache_data(show_spinner=False)
 def _audio_wav_bytes(audio_path: str) -> Optional[bytes]:
     """Decode any audio (opus / flac / wav) → WAV bytes at native sample rate."""
@@ -217,7 +247,8 @@ def _audio_duration(audio_path: str) -> float:
     """Return duration in seconds; falls back to 5.0 on error."""
     try:
         import librosa
-        return float(librosa.get_duration(path=audio_path))
+        resolved = str(resolve_audio_path(audio_path))
+        return float(librosa.get_duration(path=resolved))
     except Exception:
         return 5.0
 
@@ -565,11 +596,12 @@ with tab_ref:
         with st.container():
             st.markdown(f"**{flag} {label} — segment {i}**")
 
-            wav = _audio_wav_bytes(str(seg.audio_path))
+            _resolved_path = resolve_audio_path(str(seg.audio_path))
+            wav = _audio_wav_bytes(str(_resolved_path))
             if wav:
                 st.audio(wav, format="audio/wav")
             else:
-                st.caption(f"_(audio unavailable: `{seg.audio_path}`)_")
+                st.caption(f"_(audio unavailable — tried: `{_resolved_path}`)_")
 
             st.markdown(
                 _transcript_card_html(seg.transcript or "(no transcript)", seg.language),
