@@ -21,6 +21,8 @@ from __future__ import annotations
 import io
 import json
 import sys
+import tempfile
+import wave
 from pathlib import Path
 from typing import Dict, List, Optional
 
@@ -240,6 +242,47 @@ def _switch_time_cached(entry_id: str, manifest_path: str) -> Optional[float]:
         offset += dur
         prev_lang = seg.language
     return None
+
+
+def _audio_duration_from_bytes(audio_bytes: bytes) -> Optional[float]:
+    try:
+        with wave.open(io.BytesIO(audio_bytes), "rb") as wav_file:
+            frame_rate = wav_file.getframerate()
+            frame_count = wav_file.getnframes()
+        if frame_rate <= 0:
+            return None
+        return frame_count / frame_rate
+    except Exception:
+        return None
+
+
+@st.cache_resource(show_spinner=False)
+def _live_transcriber_cached(model_size: str, device: str):
+    from src.asr.transcribe import Transcriber
+
+    return Transcriber(model_size=model_size, device=device)
+
+
+def _transcribe_live_audio(audio_bytes: bytes, language: str, model_size: str = "base") -> str:
+    temp_path = None
+    try:
+        with tempfile.NamedTemporaryFile(delete=False, suffix=".wav") as tmp:
+            tmp.write(audio_bytes)
+            temp_path = tmp.name
+        transcriber = _live_transcriber_cached(model_size=model_size, device="cpu")
+        return transcriber._transcribe_file(temp_path, language=language)
+    finally:
+        if temp_path:
+            try:
+                Path(temp_path).unlink(missing_ok=True)
+            except Exception:
+                pass
+
+
+def _live_entry_metrics(ref: str, hyp: str, language: str) -> dict:
+    from src.asr.evaluate import compute_entry_metrics
+
+    return compute_entry_metrics(ref, hyp, language=language)
 
 
 @st.cache_data(show_spinner=False)
@@ -494,7 +537,9 @@ st.divider()
 # Tabs
 # ─────────────────────────────────────────────────────────────────────────────
 
-tab_ref, tab_cmp, tab_wer = st.tabs(["📄 Reference", "⚖️ Comparison", "📊 WER Summary"])
+tab_ref, tab_cmp, tab_wer, tab_live = st.tabs(
+    ["📄 Reference", "⚖️ Comparison", "📊 WER Summary", "🎤 Live Recording"]
+)
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -742,3 +787,110 @@ with tab_wer:
             plt.close(fig)
         except Exception as exc:
             st.warning(f"Could not render bar chart: {exc}")
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# TAB 4 — Live Recording
+# ══════════════════════════════════════════════════════════════════════════════
+
+with tab_live:
+    st.subheader("Live recording ASR demo")
+    st.caption(
+        "Record a short clip in the browser, run Whisper on CPU, and compare "
+        "against your own reference transcript."
+    )
+
+    live_language_label = st.selectbox(
+        "Spoken language",
+        ["English", "Spanish"],
+        index=0,
+        key="live_language",
+    )
+    live_language = "en" if live_language_label == "English" else "es"
+
+    live_audio = None
+    live_audio_bytes = b""
+    live_duration = None
+    if hasattr(st, "audio_input"):
+        live_audio = st.audio_input(
+            "Microphone recording",
+            sample_rate=16000,
+            key="live_audio_input",
+        )
+        live_audio_bytes = live_audio.getvalue() if live_audio is not None else b""
+        live_duration = _audio_duration_from_bytes(live_audio_bytes) if live_audio_bytes else None
+
+        if live_audio_bytes:
+            st.audio(live_audio_bytes, format="audio/wav")
+            if live_duration is not None:
+                st.caption(f"Recording duration: **{live_duration:.1f}s**")
+        else:
+            st.info(
+                "Record audio, then stop. If no clip appears, check your browser's "
+                "microphone permissions."
+            )
+    else:
+        st.error("This Streamlit version does not support `st.audio_input`.")
+
+    live_reference = st.text_area(
+        "Reference transcript",
+        height=140,
+        placeholder="Enter the expected transcript here to compute WER.",
+        key="live_reference",
+    )
+
+    if st.button("Run ASR", type="primary", key="live_run_asr"):
+        if not live_audio_bytes:
+            st.error("No recording found. Record a clip before running ASR.")
+        elif len(live_audio_bytes) <= 44:
+            st.error("Recorded audio appears empty. Please try recording again.")
+        else:
+            try:
+                with st.spinner("Running Whisper base on CPU..."):
+                    live_hypothesis = _transcribe_live_audio(
+                        live_audio_bytes,
+                        language=live_language,
+                        model_size="base",
+                    )
+                live_metrics = (
+                    _live_entry_metrics(live_reference, live_hypothesis, live_language)
+                    if live_reference.strip()
+                    else None
+                )
+                st.session_state["live_asr_result"] = {
+                    "language": live_language,
+                    "reference": live_reference,
+                    "hypothesis": live_hypothesis,
+                    "duration": live_duration,
+                    "metrics": live_metrics,
+                }
+            except Exception as exc:
+                st.error(f"ASR failed: {exc}")
+
+    live_result = st.session_state.get("live_asr_result")
+    if live_result:
+        st.divider()
+        st.markdown("#### Result")
+        st.caption("Model: `Whisper base` on `CPU`")
+
+        if live_result["metrics"] is not None:
+            metrics = live_result["metrics"]
+            m1, m2, m3 = st.columns(3)
+            if metrics.get("wer") is not None:
+                m1.metric("WER", f"{metrics['wer']:.1%}")
+            if metrics.get("mer") is not None:
+                m2.metric("MER", f"{metrics['mer']:.1%}")
+            m3.metric("Ref Words", str(metrics.get("ref_words", 0)))
+            st.caption(
+                f"Substitutions: **{metrics.get('substitutions', 0)}** | "
+                f"Deletions: **{metrics.get('deletions', 0)}** | "
+                f"Insertions: **{metrics.get('insertions', 0)}**"
+            )
+        else:
+            st.info("Enter a reference transcript to compute WER for the recorded clip.")
+
+        st.markdown("**Hypothesis**")
+        st.write(live_result["hypothesis"] or "—")
+
+        st.markdown("**Reference**")
+        st.write(live_result["reference"] or "—")
