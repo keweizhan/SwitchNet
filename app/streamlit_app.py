@@ -263,14 +263,21 @@ def _live_transcriber_cached(model_size: str, device: str):
     return Transcriber(model_size=model_size, device=device)
 
 
-def _transcribe_live_audio(audio_bytes: bytes, language: str, model_size: str = "base") -> str:
+def _transcribe_live_audio(
+    audio_bytes: bytes, language: Optional[str], model_size: str = "base"
+) -> tuple:
+    """Transcribe recorded audio bytes via Whisper.
+
+    Returns:
+        (hypothesis: str, detected_language: str)
+    """
     temp_path = None
     try:
         with tempfile.NamedTemporaryFile(delete=False, suffix=".wav") as tmp:
             tmp.write(audio_bytes)
             temp_path = tmp.name
         transcriber = _live_transcriber_cached(model_size=model_size, device="cpu")
-        return transcriber._transcribe_file(temp_path, language=language)
+        return transcriber._transcribe_file_ex(temp_path, language=language)
     finally:
         if temp_path:
             try:
@@ -282,6 +289,7 @@ def _transcribe_live_audio(audio_bytes: bytes, language: str, model_size: str = 
 def _live_entry_metrics(ref: str, hyp: str, language: str) -> dict:
     from src.asr.evaluate import compute_entry_metrics
 
+    # normalize.py already handles unknown language codes with basic lowercasing
     return compute_entry_metrics(ref, hyp, language=language)
 
 
@@ -800,14 +808,31 @@ with tab_live:
         "against your own reference transcript."
     )
 
+    # --- Language selector --------------------------------------------------
+    _LANG_OPTS = ["Auto (detect)", "English", "Spanish", "Other"]
     live_language_label = st.selectbox(
         "Spoken language",
-        ["English", "Spanish"],
+        _LANG_OPTS,
         index=0,
         key="live_language",
+        help="Auto lets Whisper detect the language. Choose Other to enter any BCP-47 code.",
     )
-    live_language = "en" if live_language_label == "English" else "es"
 
+    live_language_code: Optional[str] = None  # None → Whisper auto-detect
+    if live_language_label == "English":
+        live_language_code = "en"
+    elif live_language_label == "Spanish":
+        live_language_code = "es"
+    elif live_language_label == "Other":
+        _custom = st.text_input(
+            "Language code (e.g. fr, zh, de, ja, ko, ar …)",
+            max_chars=10,
+            placeholder="fr",
+            key="live_language_custom",
+        ).strip().lower()
+        live_language_code = _custom if _custom else None
+
+    # --- Audio input --------------------------------------------------------
     live_audio = None
     live_audio_bytes = b""
     live_duration = None
@@ -846,19 +871,32 @@ with tab_live:
             st.error("Recorded audio appears empty. Please try recording again.")
         else:
             try:
-                with st.spinner("Running Whisper base on CPU..."):
-                    live_hypothesis = _transcribe_live_audio(
+                lang_label = (
+                    live_language_code if live_language_code else "auto"
+                )
+                with st.spinner(f"Running Whisper base on CPU (language: {lang_label})…"):
+                    live_hypothesis, live_detected = _transcribe_live_audio(
                         live_audio_bytes,
-                        language=live_language,
+                        language=live_language_code,
                         model_size="base",
                     )
+                # Use detected language for WER normalization; fall back to "en"
+                wer_lang = live_detected if live_detected not in ("unknown", None) else "en"
                 live_metrics = (
-                    _live_entry_metrics(live_reference, live_hypothesis, live_language)
+                    _live_entry_metrics(live_reference, live_hypothesis, wer_lang)
                     if live_reference.strip()
                     else None
                 )
+                # Detect language mismatch: user forced a language but Whisper saw something else
+                lang_mismatch = (
+                    live_language_code is not None
+                    and live_detected not in ("unknown", None)
+                    and live_detected != live_language_code
+                )
                 st.session_state["live_asr_result"] = {
-                    "language": live_language,
+                    "selected_language": live_language_code,
+                    "detected_language": live_detected,
+                    "lang_mismatch": lang_mismatch,
                     "reference": live_reference,
                     "hypothesis": live_hypothesis,
                     "duration": live_duration,
@@ -873,6 +911,20 @@ with tab_live:
         st.markdown("#### Result")
         st.caption("Model: `Whisper base` on `CPU`")
 
+        # Language info row
+        _det = live_result.get("detected_language", "unknown")
+        _sel = live_result.get("selected_language")
+        if _sel is None:
+            st.caption(f"Language detected by Whisper: **{_det}**")
+        else:
+            st.caption(f"Language: selected **{_sel}** | Whisper reported **{_det}**")
+
+        if live_result.get("lang_mismatch"):
+            st.warning(
+                f"Language mismatch: you selected **{_sel}** but Whisper detected **{_det}**. "
+                "The transcript may be less accurate."
+            )
+
         if live_result["metrics"] is not None:
             metrics = live_result["metrics"]
             m1, m2, m3 = st.columns(3)
@@ -885,6 +937,9 @@ with tab_live:
                 f"Substitutions: **{metrics.get('substitutions', 0)}** | "
                 f"Deletions: **{metrics.get('deletions', 0)}** | "
                 f"Insertions: **{metrics.get('insertions', 0)}**"
+            )
+            st.caption(
+                "Note: WER is meaningful only if the reference language matches the spoken language."
             )
         else:
             st.info("Enter a reference transcript to compute WER for the recorded clip.")

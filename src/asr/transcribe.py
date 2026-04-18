@@ -78,11 +78,12 @@ class Transcriber:
             audio = self.preprocessor(audio, sr)
         return audio
 
-    def _transcribe_file(self, audio_path: str, language: str, task: str = "transcribe") -> str:
-        """Transcribe a single audio file with a fixed language.
+    def _transcribe_file(self, audio_path: str, language: Optional[str] = None, task: str = "transcribe") -> str:
+        """Transcribe a single audio file.
 
         Args:
-            task: Whisper task -- "transcribe" (default) or "translate" (output English).
+            language: BCP-47 code ("en", "fr", …) or None for Whisper auto-detection.
+            task:     "transcribe" (default) or "translate" (output English).
 
         If self.preprocessor is set, the audio is loaded, preprocessed, and passed
         as a numpy array.  Otherwise the file path is passed directly (faster path).
@@ -103,6 +104,33 @@ class Transcriber:
                 fp16=(self.device != "cpu"),
             )
         return result["text"].strip()
+
+    def _transcribe_file_ex(
+        self, audio_path: str, language: Optional[str] = None, task: str = "transcribe"
+    ) -> tuple:
+        """Like _transcribe_file but also returns the detected/used language code.
+
+        Returns:
+            (text: str, detected_language: str)
+        """
+        if self.preprocessor is not None:
+            audio = self._load_file_audio(audio_path)
+            result = self.model.transcribe(
+                audio,
+                language=language,
+                task=task,
+                fp16=(self.device != "cpu"),
+            )
+        else:
+            result = self.model.transcribe(
+                audio_path,
+                language=language,
+                task=task,
+                fp16=(self.device != "cpu"),
+            )
+        text = result["text"].strip()
+        detected = result.get("language") or language or "unknown"
+        return text, detected
 
     def _transcribe_file_with_segments(
         self, audio_path: str, language: str, task: str = "transcribe"
