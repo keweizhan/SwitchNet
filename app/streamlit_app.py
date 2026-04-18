@@ -49,6 +49,107 @@ st.set_page_config(
     layout="wide",
 )
 
+st.markdown(
+    """
+    <style>
+    .transcript-card {
+        padding: 16px 18px;
+        border-radius: 14px;
+        border: 1px solid rgba(255, 255, 255, 0.08);
+        color: #f5f7fa;
+        font-size: 1.08rem;
+        line-height: 1.65;
+        margin-top: 6px;
+        box-shadow: 0 10px 24px rgba(0, 0, 0, 0.22);
+    }
+    .transcript-card.es {
+        background: linear-gradient(180deg, rgba(90, 24, 30, 0.92), rgba(52, 16, 20, 0.94));
+        border-color: rgba(231, 76, 60, 0.45);
+        box-shadow: inset 4px 0 0 #e74c3c, 0 10px 24px rgba(0, 0, 0, 0.22);
+    }
+    .transcript-card.en {
+        background: linear-gradient(180deg, rgba(18, 66, 42, 0.92), rgba(11, 42, 28, 0.94));
+        border-color: rgba(39, 174, 96, 0.45);
+        box-shadow: inset 4px 0 0 #27ae60, 0 10px 24px rgba(0, 0, 0, 0.22);
+    }
+    .switch-banner {
+        margin: 18px auto 14px;
+        max-width: 640px;
+        padding: 10px 18px;
+        border-radius: 999px;
+        border: 1px solid rgba(255, 196, 87, 0.42);
+        background: linear-gradient(180deg, rgba(120, 80, 18, 0.88), rgba(82, 56, 14, 0.94));
+        color: #fff4cf;
+        text-align: center;
+        font-weight: 700;
+        font-size: 1.02rem;
+        letter-spacing: 0.08em;
+        box-shadow: 0 8px 22px rgba(0, 0, 0, 0.2);
+    }
+    .cue-table {
+        width: 100%;
+        border-collapse: separate;
+        border-spacing: 0 8px;
+        font-size: 0.95rem;
+        color: #f5f7fa;
+    }
+    .cue-table td {
+        padding: 10px 12px;
+        vertical-align: top;
+    }
+    .cue-table .time-cell {
+        width: 86px;
+        white-space: nowrap;
+        color: #cbd5e1;
+        font-size: 0.82rem;
+        font-variant-numeric: tabular-nums;
+    }
+    .cue-table .badge-cell {
+        width: 40px;
+        padding-right: 6px;
+    }
+    .cue-table .text-cell {
+        line-height: 1.55;
+    }
+    .cue-row.es td {
+        background: rgba(103, 30, 39, 0.86);
+        border-top: 1px solid rgba(231, 76, 60, 0.32);
+        border-bottom: 1px solid rgba(231, 76, 60, 0.32);
+    }
+    .cue-row.en td {
+        background: rgba(21, 77, 49, 0.86);
+        border-top: 1px solid rgba(39, 174, 96, 0.32);
+        border-bottom: 1px solid rgba(39, 174, 96, 0.32);
+    }
+    .cue-row.neutral td {
+        background: rgba(44, 52, 64, 0.88);
+        border-top: 1px solid rgba(148, 163, 184, 0.18);
+        border-bottom: 1px solid rgba(148, 163, 184, 0.18);
+    }
+    .cue-row td:first-child {
+        border-top-left-radius: 12px;
+        border-bottom-left-radius: 12px;
+    }
+    .cue-row td:last-child {
+        border-top-right-radius: 12px;
+        border-bottom-right-radius: 12px;
+    }
+    .cue-switch td {
+        padding: 12px 10px;
+        border-radius: 12px;
+        border: 1px solid rgba(255, 196, 87, 0.42);
+        background: linear-gradient(180deg, rgba(120, 80, 18, 0.88), rgba(82, 56, 14, 0.94));
+        color: #fff4cf;
+        text-align: center;
+        font-size: 0.9rem;
+        font-weight: 700;
+        letter-spacing: 0.08em;
+    }
+    </style>
+    """,
+    unsafe_allow_html=True,
+)
+
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Cached I/O helpers
@@ -211,6 +312,11 @@ def _lang_badge(lang: Optional[str]) -> str:
     return "🌐"
 
 
+def _transcript_card_html(text: str, lang: Optional[str]) -> str:
+    lang_class = "es" if lang == "es" else "en"
+    return f'<div class="transcript-card {lang_class}">{text or "(no transcript)"}</div>'
+
+
 def _cue_rows_html(cues: List[SubtitleCue], switch_time: Optional[float]) -> str:
     """Render cues as an HTML table; inserts a highlighted switch separator row."""
     rows: List[str] = []
@@ -218,21 +324,21 @@ def _cue_rows_html(cues: List[SubtitleCue], switch_time: Optional[float]) -> str
     for c in cues:
         if switch_time is not None and not switch_inserted and c.start >= switch_time:
             rows.append(
-                '<tr style="background:#fff3cd;font-weight:bold;">'
-                '<td colspan="3" style="text-align:center;padding:6px 8px;'
-                'letter-spacing:0.05em;">⟵ ES → EN SWITCH ⟶</td></tr>'
+                '<tr class="cue-switch">'
+                '<td colspan="3">ES -> EN SWITCH</td></tr>'
             )
             switch_inserted = True
         badge = _lang_badge(c.source_language)
         text  = c.text.replace("\n", "<br>")
+        lang_class = "es" if c.source_language == "es" else "en" if c.source_language == "en" else "neutral"
         rows.append(
-            f'<tr><td style="white-space:nowrap;color:#888;font-size:0.78em;'
-            f'padding:3px 6px;vertical-align:top;">{_fmt_time(c.start)}</td>'
-            f'<td style="padding:3px 4px;vertical-align:top;">{badge}</td>'
-            f'<td style="padding:3px 10px;">{text}</td></tr>'
+            f'<tr class="cue-row {lang_class}">'
+            f'<td class="time-cell">{_fmt_time(c.start)}</td>'
+            f'<td class="badge-cell">{badge}</td>'
+            f'<td class="text-cell">{text}</td></tr>'
         )
     return (
-        '<table style="width:100%;border-collapse:collapse;font-size:0.88em;">'
+        '<table class="cue-table">'
         + "".join(rows)
         + "</table>"
     )
@@ -381,20 +487,15 @@ with tab_ref:
             else:
                 st.caption(f"_(audio unavailable: `{seg.audio_path}`)_")
 
-            border_color = "#e74c3c" if seg.language == "es" else "#27ae60"
             st.markdown(
-                f'<div style="background:#f8f9fa;border-left:4px solid {border_color};'
-                f'padding:10px 14px;border-radius:4px;font-size:1.05em;margin-top:4px;">'
-                f'{seg.transcript or "(no transcript)"}'
-                f"</div>",
+                _transcript_card_html(seg.transcript or "(no transcript)", seg.language),
                 unsafe_allow_html=True,
             )
 
         if i < len(entry.segments) - 1:
             st.markdown(
-                '<div style="text-align:center;margin:16px 0 12px;font-weight:bold;'
-                'font-size:1.1em;color:#c0392b;letter-spacing:0.05em;">'
-                "── ES → EN SWITCH ──"
+                '<div class="switch-banner">'
+                "ES -> EN SWITCH"
                 "</div>",
                 unsafe_allow_html=True,
             )
@@ -408,7 +509,7 @@ with tab_cmp:
     st.subheader("Cue-by-cue comparison")
     st.caption(
         "Each column shows timestamped cues. "
-        "The yellow row marks the ES→EN switch boundary."
+        "The highlighted row marks the ES→EN switch boundary."
     )
 
     ref_cues = _reference_cues_cached(entry.id, manifest_path)
