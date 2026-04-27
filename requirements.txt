@@ -2,7 +2,7 @@ openai-whisper
 torch
 numpy
 librosa
-jiwer
+jiwer>=2.3        # >=3.x uses process_words; >=2.3 uses compute_measures — both supported
 
 # Optional: plotting (scripts/plot_results.py)
 #   pip install matplotlib

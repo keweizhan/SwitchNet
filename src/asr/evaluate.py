@@ -23,10 +23,63 @@ import re
 from pathlib import Path
 from typing import List, Optional
 
-from jiwer import wer, mer, compute_measures
+import jiwer
 
 from src.data.manifest import ManifestEntry, load_manifest
 from src.utils.normalize import normalize_text
+
+
+# ---------------------------------------------------------------------------
+# jiwer compatibility shim
+# ---------------------------------------------------------------------------
+
+def compute_word_measures(reference: str, hypothesis: str) -> dict:
+    """Compute word-level ASR metrics compatible with jiwer ≥2 and ≥3.
+
+    jiwer ≥3 removed ``compute_measures`` in favour of ``process_words``.
+    This helper tries ``process_words`` first, falls back to
+    ``compute_measures``, so the codebase works with either version.
+
+    Args:
+        reference:  Ground-truth transcript (already normalised).
+        hypothesis: ASR output transcript (already normalised).
+
+    Returns:
+        Dict with keys: wer, mer, hits, substitutions, deletions, insertions.
+    """
+    if hasattr(jiwer, "process_words"):
+        out = jiwer.process_words(reference, hypothesis)
+        return {
+            "wer":           float(out.wer),
+            "mer":           float(out.mer),
+            "hits":          int(out.hits),
+            "substitutions": int(out.substitutions),
+            "deletions":     int(out.deletions),
+            "insertions":    int(out.insertions),
+        }
+    if hasattr(jiwer, "compute_measures"):
+        m = jiwer.compute_measures(reference, hypothesis)
+        return {
+            "wer":           float(m.get("wer",           0.0)),
+            "mer":           float(m.get("mer",           0.0)),
+            "hits":          int(  m.get("hits",          0)),
+            "substitutions": int(  m.get("substitutions", 0)),
+            "deletions":     int(  m.get("deletions",     0)),
+            "insertions":    int(  m.get("insertions",    0)),
+        }
+    raise RuntimeError(
+        "Unsupported jiwer version: neither process_words nor compute_measures "
+        "is available.  Install jiwer>=2.3: pip install 'jiwer>=2.3'"
+    )
+
+
+def _compute_measures_compat(refs, hyps) -> dict:
+    """Internal helper: accepts string or list[str] for both ref and hyp."""
+    if isinstance(refs, list):
+        refs = " ".join(refs)
+    if isinstance(hyps, list):
+        hyps = " ".join(hyps)
+    return compute_word_measures(refs, hyps)
 
 
 # ---------------------------------------------------------------------------
@@ -49,7 +102,7 @@ def compute_entry_metrics(ref: str, hyp: str, language: str = "en") -> dict:
     if not ref_n.strip():
         return {"wer": None, "mer": None, "ref_words": 0, "hyp_words": len(hyp_n.split())}
 
-    measures = compute_measures(ref_n, hyp_n)
+    measures = compute_word_measures(ref_n, hyp_n)
     return {
         "wer": round(measures["wer"], 4),
         "mer": round(measures["mer"], 4),
@@ -162,9 +215,7 @@ def evaluate_results(
 
     # Aggregate WER (corpus-level, not mean of per-utterance WER)
     def corpus_wer(refs, hyps):
-        joined_ref = [" ".join(refs)]
-        joined_hyp = [" ".join(hyps)]
-        m = compute_measures(joined_ref, joined_hyp)
+        m = _compute_measures_compat(refs, hyps)
         return round(m["wer"], 4), round(m["mer"], 4)
 
     overall_wer, overall_mer = corpus_wer(all_refs, all_hyps)
