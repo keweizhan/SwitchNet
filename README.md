@@ -210,6 +210,47 @@ Overall WER improves in both 3-segment conditions, but switch-point WER diverges
 
 ---
 
+## Clean Local Demo Data
+
+The full 50-entry bilingual manifest (`data/manifests/bilingual_es-en_50.jsonl`) was built on a machine that had the complete MLS Spanish test set. The local audio subset in this repo does not include every specific utterance referenced by that manifest, so the Streamlit demo will show "audio not available" for most entries.
+
+To build a clean demo from the audio files that **are** present locally:
+
+```bash
+# Step 1 — build a small bilingual manifest from locally available audio
+python scripts/build_manifests.py bilingual \
+    --en-manifest data/manifests/en_librispeech_test.jsonl \
+    --es-manifest data/manifests/es_mls_local.jsonl \
+    --output      data/manifests/bilingual_local_demo.jsonl \
+    --pairs 10 --pattern es-en
+
+# Step 2 — run Whisper inference
+python scripts/run_eval.py \
+    --manifest data/manifests/bilingual_local_demo.jsonl \
+    --model large-v3 --tag local_demo_large_cpu
+
+# Step 3 — run WhisperX inference
+python scripts/run_eval_whisperx.py \
+    --manifest data/manifests/bilingual_local_demo.jsonl \
+    --model large-v3 --tag wx_local_demo_large_cpu
+
+# Step 4 — filter to fully-present entries and write clean demo files
+python scripts/prepare_clean_demo_data.py \
+    --manifest            data/manifests/bilingual_local_demo.jsonl \
+    --whisper-jsonl       results/local_demo_large_cpu.jsonl \
+    --whisperx-jsonl      results/wx_local_demo_large_cpu.jsonl \
+    --out-manifest        data/demo/bilingual_es-en_clean_demo.jsonl \
+    --out-whisper-jsonl   results/demo/bilingual_es-en_clean_whisper.jsonl \
+    --out-whisperx-jsonl  results/demo/bilingual_es-en_clean_whisperx.jsonl \
+    --max-entries 30
+```
+
+Once `data/demo/bilingual_es-en_clean_demo.jsonl` exists, the Streamlit app automatically
+prefers it (shown with a ✅ badge in the sidebar). Broken entries are **dropped, not faked** —
+the filter only keeps entries where every audio file is confirmed present.
+
+---
+
 ## Notes and Caveats
 
 - **Bilingual samples are synthetic.** Each entry is built by concatenating real monolingual utterances from separate corpora. This is a controlled approximation, not natural code-switched speech.
