@@ -414,15 +414,73 @@ def _model_cues_cached(entry_id: str, manifest_path: str, jsonl_path: str) -> Li
 
 @st.cache_data(show_spinner=False)
 def _wer_for_entry(entry_id: str, jsonl_name: str) -> Optional[float]:
-    """Look up this entry's WER from the corresponding *_summary.json."""
+    """Look up this entry's WER from the corresponding *_summary.json.
+
+    Searches DEMO_RESULTS first, then RESULTS_DIR, so clean demo summaries
+    are found even when their stem differs from the full-results naming.
+    """
     stem = Path(jsonl_name).stem
-    summary = _load_summary(str(RESULTS_DIR / f"{stem}_summary.json"))
-    if not summary:
-        return None
-    for pe in summary.get("per_entry", []):
-        if pe.get("id") == entry_id:
-            return pe.get("wer")
+    for results_dir in [DEMO_RESULTS, RESULTS_DIR]:
+        summary = _load_summary(str(results_dir / f"{stem}_summary.json"))
+        if summary:
+            for pe in summary.get("per_entry", []):
+                if pe.get("id") == entry_id:
+                    return pe.get("wer")
     return None
+
+
+def _validate_result_ids(
+    manifest_path: str,
+    whisper_path: Optional[str],
+    whisperx_path: Optional[str],
+    selected_id: str,
+) -> List[str]:
+    """Return a list of warning strings for ID mismatches across the three files.
+
+    Checks:
+    - selected entry ID exists in Whisper JSONL (if provided)
+    - selected entry ID exists in WhisperX JSONL (if provided)
+    - lists up to 5 manifest IDs absent from each result file
+    """
+    warnings: List[str] = []
+    try:
+        manifest_ids = set()
+        with open(manifest_path, encoding="utf-8") as f:
+            for line in f:
+                line = line.strip()
+                if line:
+                    manifest_ids.add(json.loads(line).get("id", ""))
+
+        for label, path in [("Whisper", whisper_path), ("WhisperX", whisperx_path)]:
+            if not path:
+                continue
+            result_ids = set()
+            try:
+                with open(path, encoding="utf-8") as f:
+                    for line in f:
+                        line = line.strip()
+                        if line:
+                            result_ids.add(json.loads(line).get("id", ""))
+            except Exception as exc:
+                warnings.append(f"{label}: could not read JSONL — {exc}")
+                continue
+
+            if selected_id not in result_ids:
+                warnings.append(
+                    f"{label}: selected entry `{selected_id.split('_', 3)[-1][:40]}` "
+                    "not found in result JSONL."
+                )
+            missing = manifest_ids - result_ids
+            if missing:
+                sample = sorted(missing)[:5]
+                extra = f" (+ {len(missing) - 5} more)" if len(missing) > 5 else ""
+                warnings.append(
+                    f"{label}: {len(missing)} manifest IDs missing from results. "
+                    f"Sample: {', '.join(s.split('_', 3)[-1][:30] for s in sample)}{extra}"
+                )
+    except Exception as exc:
+        warnings.append(f"Validation error: {exc}")
+    return warnings
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -503,7 +561,7 @@ def _cue_rows_html(cues: List[SubtitleCue], switch_time: Optional[float]) -> str
 
 def _available_manifests() -> List[str]:
     names = sorted(p.name for p in MANIFESTS_DIR.glob("bilingual_es-en_*.jsonl"))
-    # Prepend clean demo files if they exist (show as first choice)
+    # Prepend clean demo files (show as first choice)
     clean_names = sorted(p.name for p in DEMO_DIR.glob("bilingual_es-en_*.jsonl")) if DEMO_DIR.exists() else []
     return clean_names + [n for n in names if n not in clean_names]
 
@@ -515,10 +573,39 @@ def _manifest_dir_for(name: str) -> Path:
     return MANIFESTS_DIR
 
 
-def _available_jsonls(pattern: str) -> List[str]:
-    demo = sorted(p.name for p in DEMO_RESULTS.glob(pattern)) if DEMO_RESULTS.exists() else []
-    full = sorted(p.name for p in RESULTS_DIR.glob(pattern))
-    return demo + [n for n in full if n not in demo]
+def _is_whisperx_jsonl(name: str) -> bool:
+    """True if a JSONL filename belongs to a WhisperX run.
+
+    Matches: wx_* prefix  OR  *whisperx* anywhere in the stem.
+    """
+    stem = Path(name).stem.lower()
+    return stem.startswith("wx_") or "whisperx" in stem
+
+
+def _available_whisper_jsonls() -> List[str]:
+    """Collect Whisper (non-WhisperX) result JSONLs; demo dir first."""
+    seen: set[str] = set()
+    result: List[str] = []
+    dirs = ([DEMO_RESULTS] if DEMO_RESULTS.exists() else []) + [RESULTS_DIR]
+    for d in dirs:
+        for p in sorted(d.glob("bilingual_es-en_*.jsonl")):
+            if not _is_whisperx_jsonl(p.name) and p.name not in seen:
+                seen.add(p.name)
+                result.append(p.name)
+    return result
+
+
+def _available_whisperx_jsonls() -> List[str]:
+    """Collect WhisperX result JSONLs (wx_* prefix OR *whisperx* stem); demo first."""
+    seen: set[str] = set()
+    result: List[str] = []
+    dirs = ([DEMO_RESULTS] if DEMO_RESULTS.exists() else []) + [RESULTS_DIR]
+    for d in dirs:
+        for p in sorted(d.glob("*.jsonl")):
+            if _is_whisperx_jsonl(p.name) and p.name not in seen:
+                seen.add(p.name)
+                result.append(p.name)
+    return result
 
 
 def _results_dir_for(name: str) -> Path:
@@ -536,21 +623,34 @@ def _entry_has_audio(entry: ManifestEntry) -> bool:
     return True
 
 
+# ── pre-flight: check clean demo completeness ─────────────────────────────────
+_clean_whisper_ok  = _USING_CLEAN_DEMO and (DEMO_RESULTS / _CLEAN_WHISPER).exists()
+_clean_whisperx_ok = _USING_CLEAN_DEMO and (DEMO_RESULTS / _CLEAN_WHISPERX).exists()
+
+
 with st.sidebar:
     st.title("🎙️ SwitchNet Demo")
     st.caption("Bilingual ES→EN ASR comparison")
 
-    if _USING_CLEAN_DEMO:
-        st.success("✅ Using clean local demo data", icon="🗂️")
+    # ── status badge ──────────────────────────────────────────────────────────
+    if _USING_CLEAN_DEMO and _clean_whisper_ok and _clean_whisperx_ok:
+        st.success("✅ Clean local demo (all three files loaded)", icon="🗂️")
+    elif _USING_CLEAN_DEMO and not _clean_whisperx_ok:
+        st.warning(
+            f"Clean demo WhisperX results not found: "
+            f"`results/demo/{_CLEAN_WHISPERX}`",
+            icon="⚠️",
+        )
+    elif _USING_CLEAN_DEMO:
+        st.info("ℹ️ Clean demo manifest found (partial)", icon="📂")
     else:
         st.info("ℹ️ Full 50-entry manifest (some audio may be missing)", icon="📂")
 
-    # manifest
+    # ── manifest ──────────────────────────────────────────────────────────────
     manifest_choices = _available_manifests()
-    default_manifest = DEFAULT_MANIFEST
     manifest_idx = (
-        manifest_choices.index(default_manifest)
-        if default_manifest in manifest_choices else 0
+        manifest_choices.index(DEFAULT_MANIFEST)
+        if DEFAULT_MANIFEST in manifest_choices else 0
     )
     manifest_name = st.selectbox("Manifest", manifest_choices, index=manifest_idx)
     manifest_dir  = _manifest_dir_for(manifest_name)
@@ -560,7 +660,7 @@ with st.sidebar:
         all_entries = _load_manifest_cached(manifest_path)
     bilingual_entries = [e for e in all_entries if e.language == "bilingual"]
 
-    # Filter to entries whose audio is locally accessible
+    # Filter to entries with locally accessible audio
     available_entries = [e for e in bilingual_entries if _entry_has_audio(e)]
     n_total     = len(bilingual_entries)
     n_available = len(available_entries)
@@ -572,11 +672,10 @@ with st.sidebar:
             icon="⚠️",
         )
         available_entries = bilingual_entries   # fall back: show all even if broken
-
     elif n_available < n_total:
         st.caption(f"Showing {n_available} / {n_total} entries with local audio")
 
-    # entry picker
+    # ── entry picker ──────────────────────────────────────────────────────────
     entry_ids = [e.id for e in available_entries]
     default_entry_idx = 0
     if DEFAULT_ENTRY_HINT:
@@ -589,11 +688,8 @@ with st.sidebar:
     )
     entry: ManifestEntry = next(e for e in available_entries if e.id == selected_id)
 
-    # Whisper JSONL — exclude wx_ prefixed files
-    whisper_choices = ["(none)"] + [
-        n for n in _available_jsonls("bilingual_es-en_*.jsonl")
-        if not n.startswith("wx_")
-    ]
+    # ── Whisper JSONL ─────────────────────────────────────────────────────────
+    whisper_choices = ["(none)"] + _available_whisper_jsonls()
     w_default = (
         whisper_choices.index(DEFAULT_WHISPER)
         if DEFAULT_WHISPER in whisper_choices else 0
@@ -602,8 +698,8 @@ with st.sidebar:
     whisper_rdir = _results_dir_for(whisper_name) if whisper_name != "(none)" else RESULTS_DIR
     whisper_path = str(whisper_rdir / whisper_name) if whisper_name != "(none)" else None
 
-    # WhisperX JSONL
-    whisperx_choices = ["(none)"] + _available_jsonls("wx_bilingual_es-en_*.jsonl")
+    # ── WhisperX JSONL ────────────────────────────────────────────────────────
+    whisperx_choices = ["(none)"] + _available_whisperx_jsonls()
     wx_default = (
         whisperx_choices.index(DEFAULT_WHISPERX)
         if DEFAULT_WHISPERX in whisperx_choices else 0
@@ -612,7 +708,24 @@ with st.sidebar:
     whisperx_rdir = _results_dir_for(whisperx_name) if whisperx_name != "(none)" else RESULTS_DIR
     whisperx_path = str(whisperx_rdir / whisperx_name) if whisperx_name != "(none)" else None
 
+    # ── ID validation warnings ────────────────────────────────────────────────
+    _id_warnings = _validate_result_ids(
+        manifest_path, whisper_path, whisperx_path, selected_id
+    )
+    for w in _id_warnings:
+        st.caption(f"⚠️ {w}")
+
     st.divider()
+
+    # ── debug expander ────────────────────────────────────────────────────────
+    with st.expander("🔍 Debug: loaded paths", expanded=False):
+        st.code(
+            f"Manifest : {manifest_path}\n"
+            f"Whisper  : {whisper_path or '(none)'}\n"
+            f"WhisperX : {whisperx_path or '(none)'}",
+            language=None,
+        )
+
     st.caption(f"Streamlit {st.__version__}")
 
 
@@ -763,9 +876,19 @@ with tab_cmp:
                 if wer_whisperx is not None:
                     st.caption(f"WER = **{wer_whisperx:.1%}**")
             else:
-                st.caption("_(entry not found in selected JSONL)_")
+                st.warning(
+                    f"Entry not found in WhisperX JSONL.  \n"
+                    f"`{Path(whisperx_path).name}`",
+                    icon="⚠️",
+                )
         else:
-            st.caption("_(no WhisperX JSONL selected)_")
+            st.warning(
+                "No WhisperX JSONL selected.  \n"
+                "Expected: `results/demo/bilingual_es-en_clean_whisperx.jsonl`  \n"
+                "Select one in the sidebar or run "
+                "`scripts/prepare_clean_demo_data.py`.",
+                icon="⚠️",
+            )
 
     # ── per-segment text expanders ────────────────────────────────────────────
     if w_rec or wx_rec:
