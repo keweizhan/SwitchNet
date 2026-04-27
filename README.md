@@ -163,13 +163,42 @@ Side-by-side timed subtitle comparison: Reference cues | Whisper | WhisperX. Use
 Per-entry and corpus-level WER / MER table, plus a bar chart comparing Whisper vs WhisperX across all entries in the loaded JSONL.
 
 ### Live Recording tab
-Record a clip in the browser, run Whisper base on CPU, and optionally compute WER against a typed reference transcript.
+Record a clip in the browser, run Whisper base on CPU, and optionally compute WER against a typed reference transcript. The tab has two modes:
 
-- **Language selector**: Auto (Whisper language detection) / English / Spanish / Other (enter any BCP-47 code, e.g. `fr`, `zh`, `de`, `ja`)
-- **Processing**: record-then-process, not streaming
-- The result section shows the Whisper-detected language alongside the transcript
-- A mismatch warning appears if the forced language differs from the detected one
-- WER is computed using the detected language for normalization; it is meaningful only when the reference matches the spoken language
+**Monolingual mode**
+- Language selector: Auto / English / Spanish / Other (any BCP-47 code)
+- Record-then-process, not streaming
+- Shows Whisper-detected language; warns on mismatch with the selected language
+- WER is meaningful only when the reference matches the spoken language
+
+**Code-Switch Challenge mode**
+
+Record yourself reading a mixed-language sentence and see how four Whisper decoding strategies handle it.
+
+Four preset sentences are provided (EN/ES and ZH/EN/ES mixes), or type your own using `[lang]` tags:
+
+```
+[en] Can you explain [es] la diferencia [en] between WER and MER
+[zh] 今天 [en] I need to test [es] el modelo [en] again
+```
+
+The app runs four strategies in sequence and displays a comparison table:
+
+| Strategy | What it does |
+|---|---|
+| Auto (language=None) | Whisper global language detection |
+| Forced English | Decode entire clip as English |
+| Forced Spanish | Decode entire clip as Spanish |
+| Dominant language | Force the language covering the most words in the reference |
+
+**Metrics shown:** WER, MER, CER (for Chinese), substitutions, deletions, insertions, ref word count, Whisper-detected language per strategy.
+
+**Switch-point analysis:** language boundaries in the tagged reference are displayed with ±3-word context. Switch-point WER (±5 tokens) is *not* computed for live recordings because segment timestamps are unavailable; see the WER Summary tab for offline switch-point metrics.
+
+**Limitations:**
+- Auto-global detection is not segment-level language identification — a single-pass Whisper decode cannot reliably split code-switched speech at boundaries
+- WER for mixed-language references uses bilingual normalization; Chinese segments are evaluated with CER since word segmentation is not available
+- Oracle segment routing (the approach used in offline experiments) is not available in live mode because audio segment timestamps are unknown
 
 ---
 

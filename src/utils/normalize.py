@@ -103,3 +103,56 @@ def normalize_text(text: str, language: str = "en") -> str:
     else:
         # Unknown language: apply basic lowercase + punctuation removal
         return _collapse_whitespace(_remove_punctuation(text.lower()))
+
+
+# ---------------------------------------------------------------------------
+# Multi-language (code-switch) normalization
+# ---------------------------------------------------------------------------
+
+def _split_by_lang_tags(text: str) -> list:
+    """Split '[en] text [es] text' into [(lang, text), ...] pairs.
+
+    If no tags are present the whole string is returned as [("en", text)].
+    """
+    tag_re = re.compile(r"\[([a-z]{2,3})\]", re.IGNORECASE)
+    matches = list(tag_re.finditer(text))
+    if not matches:
+        return [("en", text)]
+    segments = []
+    for i, m in enumerate(matches):
+        lang = m.group(1).lower()
+        start = m.end()
+        end = matches[i + 1].start() if i + 1 < len(matches) else len(text)
+        seg_text = text[start:end].strip()
+        if seg_text:
+            segments.append((lang, seg_text))
+    return segments
+
+
+def normalize_mixed(text: str) -> str:
+    """Normalize a multi-language tagged reference string for WER comparison.
+
+    Strips [lang] tags, normalizes each segment with language-appropriate
+    rules, and returns a single concatenated string.
+
+    Example:
+        "[en] I need to finish [es] mi tarea [en] before midnight"
+        -> "i need to finish mi tarea before midnight"
+
+    Unknown language codes (e.g. "zh") fall back to basic
+    lowercase + punctuation removal so Chinese characters are preserved
+    for CER comparison downstream.
+    """
+    segments = _split_by_lang_tags(text)
+    parts = []
+    for lang, seg_text in segments:
+        if lang == "en":
+            normed = _normalize_english(seg_text)
+        elif lang == "es":
+            normed = _normalize_spanish(seg_text)
+        else:
+            # For CJK and other scripts: lowercase + remove ASCII punctuation only
+            normed = _collapse_whitespace(seg_text.lower())
+        if normed.strip():
+            parts.append(normed.strip())
+    return " ".join(parts)

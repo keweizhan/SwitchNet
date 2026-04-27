@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import io
 import json
+import re
 import sys
 import tempfile
 import wave
@@ -322,6 +323,93 @@ def _live_entry_metrics(ref: str, hyp: str, language: str) -> dict:
 
     # normalize.py already handles unknown language codes with basic lowercasing
     return compute_entry_metrics(ref, hyp, language=language)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Code-Switch Challenge Mode — presets, parsers, CER
+# ─────────────────────────────────────────────────────────────────────────────
+
+_CS_PRESETS: List[dict] = [
+    {
+        "label": "EN/ES — homework deadline",
+        "text": "[en] I need to finish [es] mi tarea [en] before midnight",
+    },
+    {
+        "label": "ES/EN — start the experiment",
+        "text": "[es] Voy a [en] start the experiment [es] y revisar los resultados",
+    },
+    {
+        "label": "EN/ES — WER vs MER",
+        "text": "[en] Can you explain [es] la diferencia [en] between WER and MER",
+    },
+    {
+        "label": "ZH/EN/ES — model test",
+        "text": "[zh] 今天 [en] I need to test [es] el modelo [en] again",
+    },
+]
+
+_LANG_TAG_RE = re.compile(r"\[([a-z]{2,3})\]", re.IGNORECASE)
+
+
+def _parse_tagged_ref(text: str) -> List[dict]:
+    """Parse '[en] text [es] text' → [{'language': ..., 'text': ...}, ...]."""
+    matches = list(_LANG_TAG_RE.finditer(text))
+    if not matches:
+        return [{"language": "en", "text": text.strip()}]
+    segments = []
+    for i, m in enumerate(matches):
+        lang = m.group(1).lower()
+        start = m.end()
+        end = matches[i + 1].start() if i + 1 < len(matches) else len(text)
+        seg_text = text[start:end].strip()
+        if seg_text:
+            segments.append({"language": lang, "text": seg_text})
+    return segments
+
+
+def _strip_lang_tags(text: str) -> str:
+    """Remove all [lang] tags from text, return plain string."""
+    return _LANG_TAG_RE.sub("", text).strip()
+
+
+def _dominant_lang_code(segments: List[dict]) -> str:
+    """Return the language code covering the most words across segments."""
+    counts: Dict[str, int] = {}
+    for seg in segments:
+        lang = seg["language"]
+        counts[lang] = counts.get(lang, 0) + len(seg["text"].split())
+    return max(counts, key=lambda k: counts[k]) if counts else "en"
+
+
+def _has_cjk(text: str) -> bool:
+    """Return True if text contains CJK Unified Ideographs or kana."""
+    return any(
+        "\u4e00" <= c <= "\u9fff" or "\u3040" <= c <= "\u30ff"
+        for c in text
+    )
+
+
+def _compute_cer(ref: str, hyp: str) -> float:
+    """Character Error Rate — for CJK where word-level WER is unreliable.
+
+    Strips spaces, computes Levenshtein distance at character level,
+    returns edits / len(ref_chars).
+    """
+    ref_chars = [c for c in ref if not c.isspace()]
+    hyp_chars = [c for c in hyp if not c.isspace()]
+    if not ref_chars:
+        return 0.0
+    n, m = len(ref_chars), len(hyp_chars)
+    prev = list(range(m + 1))
+    for i in range(1, n + 1):
+        curr = [i] + [0] * m
+        for j in range(1, m + 1):
+            if ref_chars[i - 1] == hyp_chars[j - 1]:
+                curr[j] = prev[j - 1]
+            else:
+                curr[j] = 1 + min(prev[j], curr[j - 1], prev[j - 1])
+        prev = curr
+    return round(prev[m] / n, 4)
 
 
 @st.cache_data(show_spinner=False)
@@ -836,147 +924,363 @@ with tab_wer:
 with tab_live:
     st.subheader("Live recording ASR demo")
     st.caption(
-        "Record a short clip in the browser, run Whisper on CPU, and compare "
-        "against your own reference transcript."
+        "Record a short clip in the browser, run Whisper base on CPU, and compare "
+        "against a reference transcript."
     )
 
-    # --- Language selector --------------------------------------------------
-    _LANG_OPTS = ["Auto (detect)", "English", "Spanish", "Other"]
-    live_language_label = st.selectbox(
-        "Spoken language",
-        _LANG_OPTS,
-        index=0,
-        key="live_language",
-        help="Auto lets Whisper detect the language. Choose Other to enter any BCP-47 code.",
+    live_mode = st.radio(
+        "Demo mode",
+        ["Monolingual", "Code-Switch Challenge"],
+        horizontal=True,
+        key="live_mode",
+        help=(
+            "Monolingual: single-language ASR + WER. "
+            "Code-Switch Challenge: compare four decoding strategies on mixed-language speech."
+        ),
     )
+    st.divider()
 
-    live_language_code: Optional[str] = None  # None → Whisper auto-detect
-    if live_language_label == "English":
-        live_language_code = "en"
-    elif live_language_label == "Spanish":
-        live_language_code = "es"
-    elif live_language_label == "Other":
-        _custom = st.text_input(
-            "Language code (e.g. fr, zh, de, ja, ko, ar …)",
-            max_chars=10,
-            placeholder="fr",
-            key="live_language_custom",
-        ).strip().lower()
-        live_language_code = _custom if _custom else None
+    # ══════════════════════════════════════════════════════════════════════
+    # MONOLINGUAL MODE  (unchanged behaviour)
+    # ══════════════════════════════════════════════════════════════════════
+    if live_mode == "Monolingual":
 
-    # --- Audio input --------------------------------------------------------
-    live_audio = None
-    live_audio_bytes = b""
-    live_duration = None
-    if hasattr(st, "audio_input"):
-        live_audio = st.audio_input(
-            "Microphone recording",
-            sample_rate=16000,
-            key="live_audio_input",
+        # --- Language selector --------------------------------------------
+        _LANG_OPTS = ["Auto (detect)", "English", "Spanish", "Other"]
+        live_language_label = st.selectbox(
+            "Spoken language",
+            _LANG_OPTS,
+            index=0,
+            key="live_language",
+            help="Auto lets Whisper detect the language. Choose Other for any BCP-47 code.",
         )
-        live_audio_bytes = live_audio.getvalue() if live_audio is not None else b""
-        live_duration = _audio_duration_from_bytes(live_audio_bytes) if live_audio_bytes else None
 
-        if live_audio_bytes:
-            if live_duration is not None:
-                st.caption(f"Recording duration: **{live_duration:.1f}s**")
-        else:
-            st.info(
-                "Record audio, then stop. If no clip appears, check your browser's "
-                "microphone permissions."
+        live_language_code: Optional[str] = None  # None → Whisper auto-detect
+        if live_language_label == "English":
+            live_language_code = "en"
+        elif live_language_label == "Spanish":
+            live_language_code = "es"
+        elif live_language_label == "Other":
+            _custom = st.text_input(
+                "Language code (e.g. fr, zh, de, ja, ko, ar …)",
+                max_chars=10,
+                placeholder="fr",
+                key="live_language_custom",
+            ).strip().lower()
+            live_language_code = _custom if _custom else None
+
+        # --- Audio input --------------------------------------------------
+        live_audio = None
+        live_audio_bytes = b""
+        live_duration = None
+        if hasattr(st, "audio_input"):
+            live_audio = st.audio_input(
+                "Microphone recording",
+                sample_rate=16000,
+                key="live_audio_input",
             )
-    else:
-        st.error("This Streamlit version does not support `st.audio_input`.")
+            live_audio_bytes = live_audio.getvalue() if live_audio is not None else b""
+            live_duration = _audio_duration_from_bytes(live_audio_bytes) if live_audio_bytes else None
 
-    live_reference = st.text_area(
-        "Reference transcript",
-        height=140,
-        placeholder="Enter the expected transcript here to compute WER.",
-        key="live_reference",
-    )
-
-    if st.button("Run ASR", type="primary", key="live_run_asr"):
-        if not live_audio_bytes:
-            st.error("No recording found. Record a clip before running ASR.")
-        elif len(live_audio_bytes) <= 44:
-            st.error("Recorded audio appears empty. Please try recording again.")
-        else:
-            try:
-                lang_label = (
-                    live_language_code if live_language_code else "auto"
+            if live_audio_bytes:
+                if live_duration is not None:
+                    st.caption(f"Recording duration: **{live_duration:.1f}s**")
+            else:
+                st.info(
+                    "Record audio, then stop. If no clip appears, check your browser's "
+                    "microphone permissions."
                 )
-                with st.spinner(f"Running Whisper base on CPU (language: {lang_label})…"):
-                    live_hypothesis, live_detected = _transcribe_live_audio(
-                        live_audio_bytes,
-                        language=live_language_code,
-                        model_size="base",
+        else:
+            st.error("This Streamlit version does not support `st.audio_input`.")
+
+        live_reference = st.text_area(
+            "Reference transcript",
+            height=140,
+            placeholder="Enter the expected transcript here to compute WER.",
+            key="live_reference",
+        )
+
+        if st.button("Run ASR", type="primary", key="live_run_asr"):
+            if not live_audio_bytes:
+                st.error("No recording found. Record a clip before running ASR.")
+            elif len(live_audio_bytes) <= 44:
+                st.error("Recorded audio appears empty. Please try recording again.")
+            else:
+                try:
+                    lang_label = live_language_code if live_language_code else "auto"
+                    with st.spinner(f"Running Whisper base on CPU (language: {lang_label})…"):
+                        live_hypothesis, live_detected = _transcribe_live_audio(
+                            live_audio_bytes,
+                            language=live_language_code,
+                            model_size="base",
+                        )
+                    wer_lang = live_detected if live_detected not in ("unknown", None) else "en"
+                    live_metrics = (
+                        _live_entry_metrics(live_reference, live_hypothesis, wer_lang)
+                        if live_reference.strip()
+                        else None
                     )
-                # Use detected language for WER normalization; fall back to "en"
-                wer_lang = live_detected if live_detected not in ("unknown", None) else "en"
-                live_metrics = (
-                    _live_entry_metrics(live_reference, live_hypothesis, wer_lang)
-                    if live_reference.strip()
-                    else None
+                    lang_mismatch = (
+                        live_language_code is not None
+                        and live_detected not in ("unknown", None)
+                        and live_detected != live_language_code
+                    )
+                    st.session_state["live_asr_result"] = {
+                        "selected_language": live_language_code,
+                        "detected_language": live_detected,
+                        "lang_mismatch": lang_mismatch,
+                        "reference": live_reference,
+                        "hypothesis": live_hypothesis,
+                        "duration": live_duration,
+                        "metrics": live_metrics,
+                    }
+                except Exception as exc:
+                    st.error(f"ASR failed: {exc}")
+
+        live_result = st.session_state.get("live_asr_result")
+        if live_result:
+            st.divider()
+            st.markdown("#### Result")
+            st.caption("Model: `Whisper base` on `CPU`")
+
+            _det = live_result.get("detected_language", "unknown")
+            _sel = live_result.get("selected_language")
+            if _sel is None:
+                st.caption(f"Language detected by Whisper: **{_det}**")
+            else:
+                st.caption(f"Language: selected **{_sel}** | Whisper reported **{_det}**")
+
+            if live_result.get("lang_mismatch"):
+                st.warning(
+                    f"Language mismatch: you selected **{_sel}** but Whisper detected **{_det}**. "
+                    "The transcript may be less accurate."
                 )
-                # Detect language mismatch: user forced a language but Whisper saw something else
-                lang_mismatch = (
-                    live_language_code is not None
-                    and live_detected not in ("unknown", None)
-                    and live_detected != live_language_code
+
+            if live_result["metrics"] is not None:
+                metrics = live_result["metrics"]
+                m1, m2, m3 = st.columns(3)
+                if metrics.get("wer") is not None:
+                    m1.metric("WER", f"{metrics['wer']:.1%}")
+                if metrics.get("mer") is not None:
+                    m2.metric("MER", f"{metrics['mer']:.1%}")
+                m3.metric("Ref Words", str(metrics.get("ref_words", 0)))
+                st.caption(
+                    f"Substitutions: **{metrics.get('substitutions', 0)}** | "
+                    f"Deletions: **{metrics.get('deletions', 0)}** | "
+                    f"Insertions: **{metrics.get('insertions', 0)}**"
                 )
-                st.session_state["live_asr_result"] = {
-                    "selected_language": live_language_code,
-                    "detected_language": live_detected,
-                    "lang_mismatch": lang_mismatch,
-                    "reference": live_reference,
-                    "hypothesis": live_hypothesis,
-                    "duration": live_duration,
-                    "metrics": live_metrics,
+                st.caption(
+                    "Note: WER is meaningful only if the reference language matches "
+                    "the spoken language."
+                )
+            else:
+                st.info("Enter a reference transcript to compute WER for the recorded clip.")
+
+            st.markdown("**Hypothesis**")
+            st.write(live_result["hypothesis"] or "—")
+
+            st.markdown("**Reference**")
+            st.write(live_result["reference"] or "—")
+
+    # ══════════════════════════════════════════════════════════════════════
+    # CODE-SWITCH CHALLENGE MODE
+    # ══════════════════════════════════════════════════════════════════════
+    else:
+        st.markdown(
+            "Select a preset mixed-language sentence (or write your own), "
+            "record yourself reading it aloud, then click **Run Challenge** "
+            "to see how four Whisper decoding strategies compare."
+        )
+        st.warning(
+            "⚠️ **Note:** Auto-global language detection is not the same as "
+            "segment-level language identification. Code-switched speech may "
+            "require segment-level routing for better WER — see the offline "
+            "bilingual experiments tab for a controlled comparison.",
+        )
+
+        # --- Preset selector ----------------------------------------------
+        _preset_labels = ["(custom — type your own)"] + [p["label"] for p in _CS_PRESETS]
+        _preset_choice = st.selectbox(
+            "Preset sentence",
+            _preset_labels,
+            key="cs_preset_choice",
+        )
+
+        # Keep text area in sync with the preset selector
+        if _preset_choice != "(custom — type your own)":
+            _preset_text = next(p["text"] for p in _CS_PRESETS if p["label"] == _preset_choice)
+        else:
+            _preset_text = ""
+
+        if st.session_state.get("_cs_last_preset") != _preset_choice:
+            st.session_state["cs_reference"] = _preset_text
+            st.session_state["_cs_last_preset"] = _preset_choice
+
+        cs_reference = st.text_area(
+            "Reference transcript — use `[lang]` tags, e.g. `[en] hello [es] mundo [zh] 今天`",
+            height=90,
+            key="cs_reference",
+            placeholder="[en] I need to finish [es] mi tarea [en] before midnight",
+        )
+
+        # --- Audio input --------------------------------------------------
+        cs_audio = None
+        cs_audio_bytes = b""
+        cs_duration = None
+        if hasattr(st, "audio_input"):
+            cs_audio = st.audio_input(
+                "Microphone recording",
+                sample_rate=16000,
+                key="cs_audio_input",
+            )
+            cs_audio_bytes = cs_audio.getvalue() if cs_audio is not None else b""
+            cs_duration = _audio_duration_from_bytes(cs_audio_bytes) if cs_audio_bytes else None
+
+            if cs_audio_bytes:
+                if cs_duration is not None:
+                    st.caption(f"Recording duration: **{cs_duration:.1f}s**")
+            else:
+                st.info(
+                    "Record audio, then stop. If no clip appears, check your browser's "
+                    "microphone permissions."
+                )
+        else:
+            st.error("This Streamlit version does not support `st.audio_input`.")
+
+        # --- Run Challenge button -----------------------------------------
+        if st.button("Run Challenge", type="primary", key="cs_run"):
+            if not cs_audio_bytes:
+                st.error("No recording found. Record a clip before running.")
+            elif len(cs_audio_bytes) <= 44:
+                st.error("Recorded audio appears empty. Please try recording again.")
+            else:
+                _ref_text   = cs_reference.strip()
+                _ref_plain  = _strip_lang_tags(_ref_text)
+                _parsed     = _parse_tagged_ref(_ref_text)
+                _dom_lang   = _dominant_lang_code(_parsed)
+                _has_zh     = _has_cjk(_ref_text)
+
+                _strategies = [
+                    ("Auto  (language=None)",          None),
+                    ("Forced English",                 "en"),
+                    ("Forced Spanish",                 "es"),
+                    (f"Dominant lang  ({_dom_lang})",  _dom_lang if _dom_lang in ("en", "es") else None),
+                ]
+                try:
+                    from src.utils.normalize import normalize_mixed, normalize_text as _norm_text
+                    from src.asr.evaluate import compute_entry_metrics as _cem
+
+                    _prog = st.progress(0, "Initialising…")
+                    _strat_rows = []
+
+                    for _idx, (_sname, _lcode) in enumerate(_strategies):
+                        _prog.progress(
+                            _idx / len(_strategies),
+                            f"Strategy {_idx + 1}/{len(_strategies)}: {_sname}…",
+                        )
+                        _hyp, _det = _transcribe_live_audio(
+                            cs_audio_bytes, language=_lcode, model_size="base"
+                        )
+                        if _ref_text:
+                            _ref_norm = normalize_mixed(_ref_text)
+                            _hyp_norm = _norm_text(_hyp, language="bilingual")
+                            _m = _cem(_ref_norm, _hyp_norm, language="bilingual")
+                        else:
+                            _m = {}
+                        _cer_val = _compute_cer(_ref_plain, _hyp) if _has_zh and _ref_text else None
+                        _strat_rows.append({
+                            "strategy":  _sname,
+                            "detected":  _det or "—",
+                            "hypothesis": _hyp,
+                            "wer":       _m.get("wer"),
+                            "mer":       _m.get("mer"),
+                            "cer":       _cer_val,
+                            "sub":       _m.get("substitutions", 0),
+                            "del":       _m.get("deletions", 0),
+                            "ins":       _m.get("insertions", 0),
+                            "ref_words": _m.get("ref_words", 0),
+                        })
+
+                    _prog.progress(1.0, "Done.")
+                    st.session_state["cs_challenge_result"] = {
+                        "reference":   _ref_text,
+                        "ref_plain":   _ref_plain,
+                        "parsed_segs": _parsed,
+                        "has_cjk":     _has_zh,
+                        "dom_lang":    _dom_lang,
+                        "strategies":  _strat_rows,
+                        "duration":    cs_duration,
+                    }
+                except Exception as exc:
+                    st.error(f"Challenge failed: {exc}")
+
+        # --- Results display ----------------------------------------------
+        cs_result = st.session_state.get("cs_challenge_result")
+        if cs_result:
+            st.divider()
+            st.markdown("#### Challenge Results")
+            st.caption("Model: `Whisper base` · `CPU` · 4 decoding strategies")
+
+            import pandas as pd
+
+            _rows = cs_result["strategies"]
+            _show_cer = cs_result["has_cjk"]
+
+            _table = []
+            for _r in _rows:
+                _row = {
+                    "Strategy":      _r["strategy"],
+                    "Detected":      _r["detected"],
+                    "WER":           f"{_r['wer']:.1%}"  if _r["wer"]  is not None else "—",
+                    "MER":           f"{_r['mer']:.1%}"  if _r["mer"]  is not None else "—",
+                    "Ref words":     str(_r["ref_words"]),
+                    "Sub":           str(_r["sub"]),
+                    "Del":           str(_r["del"]),
+                    "Ins":           str(_r["ins"]),
                 }
-            except Exception as exc:
-                st.error(f"ASR failed: {exc}")
+                if _show_cer:
+                    _row["CER"] = f"{_r['cer']:.1%}" if _r["cer"] is not None else "—"
+                _table.append(_row)
 
-    live_result = st.session_state.get("live_asr_result")
-    if live_result:
-        st.divider()
-        st.markdown("#### Result")
-        st.caption("Model: `Whisper base` on `CPU`")
+            st.dataframe(pd.DataFrame(_table), use_container_width=True, hide_index=True)
 
-        # Language info row
-        _det = live_result.get("detected_language", "unknown")
-        _sel = live_result.get("selected_language")
-        if _sel is None:
-            st.caption(f"Language detected by Whisper: **{_det}**")
-        else:
-            st.caption(f"Language: selected **{_sel}** | Whisper reported **{_det}**")
+            if _show_cer:
+                st.caption(
+                    "CER (Character Error Rate) is shown because CJK characters were detected. "
+                    "Word-level WER is unreliable for Chinese without segmentation."
+                )
 
-        if live_result.get("lang_mismatch"):
-            st.warning(
-                f"Language mismatch: you selected **{_sel}** but Whisper detected **{_det}**. "
-                "The transcript may be less accurate."
-            )
+            # Per-strategy hypotheses
+            st.markdown("**Hypotheses by strategy**")
+            for _r in _rows:
+                with st.expander(f"{_r['strategy']} — Whisper detected: **{_r['detected']}**"):
+                    st.write(_r["hypothesis"] or "—")
 
-        if live_result["metrics"] is not None:
-            metrics = live_result["metrics"]
-            m1, m2, m3 = st.columns(3)
-            if metrics.get("wer") is not None:
-                m1.metric("WER", f"{metrics['wer']:.1%}")
-            if metrics.get("mer") is not None:
-                m2.metric("MER", f"{metrics['mer']:.1%}")
-            m3.metric("Ref Words", str(metrics.get("ref_words", 0)))
-            st.caption(
-                f"Substitutions: **{metrics.get('substitutions', 0)}** | "
-                f"Deletions: **{metrics.get('deletions', 0)}** | "
-                f"Insertions: **{metrics.get('insertions', 0)}**"
-            )
-            st.caption(
-                "Note: WER is meaningful only if the reference language matches the spoken language."
-            )
-        else:
-            st.info("Enter a reference transcript to compute WER for the recorded clip.")
+            # Switch-point analysis
+            _segs = cs_result["parsed_segs"]
+            if len(_segs) > 1:
+                st.markdown("**Switch-point analysis**")
+                _switches = [
+                    (i, _segs[i - 1], _segs[i])
+                    for i in range(1, len(_segs))
+                    if _segs[i]["language"] != _segs[i - 1]["language"]
+                ]
+                st.caption(f"Language switches in reference: **{len(_switches)}**")
+                for _, _prev, _curr in _switches:
+                    _pw = _prev["text"].split()
+                    _cw = _curr["text"].split()
+                    _ctx = (
+                        "… " + " ".join(_pw[-3:])
+                        + f"  `[{_prev['language']}→{_curr['language']}]`  "
+                        + " ".join(_cw[:3]) + " …"
+                    )
+                    st.markdown(_ctx)
+                st.caption(
+                    "Switch-point WER (±5 tokens) requires segment timestamps and is not "
+                    "computed for live recordings. See the WER Summary tab for offline "
+                    "switch-point metrics on controlled bilingual data."
+                )
 
-        st.markdown("**Hypothesis**")
-        st.write(live_result["hypothesis"] or "—")
-
-        st.markdown("**Reference**")
-        st.write(live_result["reference"] or "—")
+            # Reference
+            st.markdown("**Reference** (with language tags)")
+            st.code(cs_result["reference"] or "—", language=None)
