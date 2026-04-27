@@ -163,13 +163,27 @@ Side-by-side timed subtitle comparison: Reference cues | Whisper | WhisperX. Use
 Per-entry and corpus-level WER / MER table, plus a bar chart comparing Whisper vs WhisperX across all entries in the loaded JSONL.
 
 ### Live Recording tab
-Record a clip in the browser, run Whisper base on CPU, and optionally compute WER against a typed reference transcript.
+Record a clip in the browser, run Whisper base on CPU, and evaluate against a typed reference transcript. Two modes:
 
-- **Language selector**: Auto (Whisper language detection) / English / Spanish / Other (enter any BCP-47 code, e.g. `fr`, `zh`, `de`, `ja`)
-- **Processing**: record-then-process, not streaming
-- The result section shows the Whisper-detected language alongside the transcript
-- A mismatch warning appears if the forced language differs from the detected one
-- WER is computed using the detected language for normalization; it is meaningful only when the reference matches the spoken language
+#### Monolingual Mode
+- **Language selector**: Auto / English / Spanish / Other (any BCP-47 code)
+- Single Whisper run, shows detected language, WER/MER, sub/del/ins counts
+- If the reference contains `[lang]` tags (e.g. `[en] hello [es] mundo`), a warning is shown and tags are **stripped before WER computation** so they are never counted as reference words
+
+#### Code-Switch Challenge Mode
+- Preset mixed-language examples or free-form `[lang]`-tagged reference
+- Tags supported: `[en]`, `[es]`, `[zh]`, and any 2–3 letter BCP-47 code
+- Parsed-segments table shows each language span
+- **Four decoding strategies** compared side by side:
+  | Strategy | Whisper language parameter |
+  |---|---|
+  | Auto-global | `None` (Whisper detects) |
+  | Forced-English | `"en"` |
+  | Forced-Spanish | `"es"` |
+  | Dominant-language | `"en"` or `"es"` inferred from tag word counts |
+- Results table: strategy · detected · WER · MER · CER (if CJK) · sub · del · ins
+- CER (Character Error Rate) shown for CJK text (word segmentation not required)
+- Note: auto-global detection is **not** segment-level language ID — mixed-language speech may need segment-level routing for accurate transcription
 
 ---
 

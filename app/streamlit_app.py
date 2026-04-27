@@ -25,8 +25,10 @@ from __future__ import annotations
 import io
 import json
 import os
+import re
 import sys
 import tempfile
+import unicodedata
 import wave
 from pathlib import Path
 from typing import Dict, List, Optional
@@ -1180,6 +1182,106 @@ with tab_wer:
             st.warning(f"Could not render bar chart: {exc}")
 
 
+# ─────────────────────────────────────────────────────────────────────────────
+# Code-Switch Challenge helpers
+# ─────────────────────────────────────────────────────────────────────────────
+
+_LANG_TAG_RE = re.compile(r"\[([a-zA-Z]{2,3})\]")
+
+_CS_PRESETS: List[dict] = [
+    {
+        "label": "EN/ES — homework deadline",
+        "text":  "[en] I need to finish [es] mi tarea [en] before midnight",
+    },
+    {
+        "label": "ES/EN — start the experiment",
+        "text":  "[es] Voy a [en] start the experiment [es] y revisar los resultados",
+    },
+    {
+        "label": "EN/ES — explain WER vs MER",
+        "text":  "[en] Can you explain [es] la diferencia [en] between WER and MER",
+    },
+    {
+        "label": "EN/ES/ZH — mixed three languages",
+        "text":  "[en] The model handles English [es] y español [zh] 但是中文需要看 CER",
+    },
+]
+
+
+def _parse_tagged_ref(text: str) -> List[dict]:
+    """Parse a tagged reference into segments.
+
+    ``[en] hello [es] mundo`` → [{'lang':'en','text':'hello'},{'lang':'es','text':'mundo'}]
+    Text before the first tag is assigned language 'unknown'.
+    """
+    matches = list(_LANG_TAG_RE.finditer(text))
+    if not matches:
+        return [{"lang": "unknown", "text": text.strip()}]
+    segments: List[dict] = []
+    # Text before first tag
+    pre = text[: matches[0].start()].strip()
+    if pre:
+        segments.append({"lang": "unknown", "text": pre})
+    for i, m in enumerate(matches):
+        lang = m.group(1).lower()
+        start = m.end()
+        end = matches[i + 1].start() if i + 1 < len(matches) else len(text)
+        seg_text = text[start:end].strip()
+        if seg_text:
+            segments.append({"lang": lang, "text": seg_text})
+    return segments
+
+
+def _strip_lang_tags(text: str) -> str:
+    """Remove all ``[xx]`` language tags from text and collapse extra whitespace."""
+    return re.sub(r"\s{2,}", " ", _LANG_TAG_RE.sub("", text)).strip()
+
+
+def _dominant_lang_code(segments: List[dict]) -> Optional[str]:
+    """Return the language code ('en' or 'es') with the most words."""
+    counts: dict[str, int] = {}
+    for seg in segments:
+        lang = seg["lang"]
+        if lang in ("en", "es"):
+            counts[lang] = counts.get(lang, 0) + len(seg["text"].split())
+    if not counts:
+        return None
+    return max(counts, key=counts.__getitem__)
+
+
+def _has_cjk(text: str) -> bool:
+    """Return True if text contains any CJK unified ideographs."""
+    return any(unicodedata.category(ch) in ("Lo",) and "\u4e00" <= ch <= "\u9fff"
+               for ch in text)
+
+
+def _compute_cer(ref: str, hyp: str) -> float:
+    """Character Error Rate via Levenshtein distance (no word segmentation)."""
+    ref_chars = [c for c in ref if not c.isspace()]
+    hyp_chars = [c for c in hyp if not c.isspace()]
+    if not ref_chars:
+        return 0.0
+    n, m = len(ref_chars), len(hyp_chars)
+    # O(n·m) DP
+    dp = list(range(m + 1))
+    for i in range(1, n + 1):
+        prev, dp[0] = dp[0], i
+        for j in range(1, m + 1):
+            temp = dp[j]
+            if ref_chars[i - 1] == hyp_chars[j - 1]:
+                dp[j] = prev
+            else:
+                dp[j] = 1 + min(prev, dp[j], dp[j - 1])
+            prev = temp
+    return dp[m] / len(ref_chars)
+
+
+def _normalize_for_wer(text: str, lang: str) -> str:
+    """Normalize text for WER computation (reuse project normalizer)."""
+    from src.utils.normalize import normalize_text
+    return normalize_text(text, language=lang)
+
+
 # ══════════════════════════════════════════════════════════════════════════════
 # TAB 4 — Live Recording
 # ══════════════════════════════════════════════════════════════════════════════
@@ -1187,147 +1289,389 @@ with tab_wer:
 with tab_live:
     st.subheader("Live recording ASR demo")
     st.caption(
-        "Record a short clip in the browser, run Whisper on CPU, and compare "
-        "against your own reference transcript."
+        "Record a clip in the browser, run Whisper base on CPU, and evaluate "
+        "against a reference transcript."
     )
 
-    # --- Language selector --------------------------------------------------
-    _LANG_OPTS = ["Auto (detect)", "English", "Spanish", "Other"]
-    live_language_label = st.selectbox(
-        "Spoken language",
-        _LANG_OPTS,
+    # ── Mode selector ────────────────────────────────────────────────────────
+    live_mode = st.radio(
+        "ASR demo mode",
+        ["Monolingual Mode", "Code-Switch Challenge Mode"],
         index=0,
-        key="live_language",
-        help="Auto lets Whisper detect the language. Choose Other to enter any BCP-47 code.",
+        horizontal=True,
+        key="live_mode",
     )
 
-    live_language_code: Optional[str] = None  # None → Whisper auto-detect
-    if live_language_label == "English":
-        live_language_code = "en"
-    elif live_language_label == "Spanish":
-        live_language_code = "es"
-    elif live_language_label == "Other":
-        _custom = st.text_input(
-            "Language code (e.g. fr, zh, de, ja, ko, ar …)",
-            max_chars=10,
-            placeholder="fr",
-            key="live_language_custom",
-        ).strip().lower()
-        live_language_code = _custom if _custom else None
+    st.divider()
 
-    # --- Audio input --------------------------------------------------------
-    live_audio = None
+    # ── Shared audio input (same widget key across both modes) ───────────────
     live_audio_bytes = b""
-    live_duration = None
+    live_duration    = None
     if hasattr(st, "audio_input"):
-        live_audio = st.audio_input(
+        _live_audio = st.audio_input(
             "Microphone recording",
             sample_rate=16000,
             key="live_audio_input",
         )
-        live_audio_bytes = live_audio.getvalue() if live_audio is not None else b""
-        live_duration = _audio_duration_from_bytes(live_audio_bytes) if live_audio_bytes else None
-
+        live_audio_bytes = _live_audio.getvalue() if _live_audio is not None else b""
+        live_duration    = _audio_duration_from_bytes(live_audio_bytes) if live_audio_bytes else None
         if live_audio_bytes:
             if live_duration is not None:
                 st.caption(f"Recording duration: **{live_duration:.1f}s**")
         else:
             st.info(
-                "Record audio, then stop. If no clip appears, check your browser's "
-                "microphone permissions."
+                "Record audio, then stop. If no clip appears, check your "
+                "browser's microphone permissions."
             )
     else:
         st.error("This Streamlit version does not support `st.audio_input`.")
 
-    live_reference = st.text_area(
-        "Reference transcript",
-        height=140,
-        placeholder="Enter the expected transcript here to compute WER.",
-        key="live_reference",
-    )
+    st.divider()
 
-    if st.button("Run ASR", type="primary", key="live_run_asr"):
-        if not live_audio_bytes:
-            st.error("No recording found. Record a clip before running ASR.")
-        elif len(live_audio_bytes) <= 44:
-            st.error("Recorded audio appears empty. Please try recording again.")
-        else:
-            try:
-                lang_label = (
-                    live_language_code if live_language_code else "auto"
-                )
-                with st.spinner(f"Running Whisper base on CPU (language: {lang_label})…"):
-                    live_hypothesis, live_detected = _transcribe_live_audio(
-                        live_audio_bytes,
-                        language=live_language_code,
-                        model_size="base",
-                    )
-                # Use detected language for WER normalization; fall back to "en"
-                wer_lang = live_detected if live_detected not in ("unknown", None) else "en"
-                live_metrics = (
-                    _live_entry_metrics(live_reference, live_hypothesis, wer_lang)
-                    if live_reference.strip()
-                    else None
-                )
-                # Detect language mismatch: user forced a language but Whisper saw something else
-                lang_mismatch = (
-                    live_language_code is not None
-                    and live_detected not in ("unknown", None)
-                    and live_detected != live_language_code
-                )
-                st.session_state["live_asr_result"] = {
-                    "selected_language": live_language_code,
-                    "detected_language": live_detected,
-                    "lang_mismatch": lang_mismatch,
-                    "reference": live_reference,
-                    "hypothesis": live_hypothesis,
-                    "duration": live_duration,
-                    "metrics": live_metrics,
-                }
-            except Exception as exc:
-                st.error(f"ASR failed: {exc}")
+    # ═══════════════════════════════════════════════════════════════════════
+    # MONOLINGUAL MODE
+    # ═══════════════════════════════════════════════════════════════════════
+    if live_mode == "Monolingual Mode":
 
-    live_result = st.session_state.get("live_asr_result")
-    if live_result:
-        st.divider()
-        st.markdown("#### Result")
-        st.caption("Model: `Whisper base` on `CPU`")
+        # Language selector
+        _LANG_OPTS = ["Auto (detect)", "English", "Spanish", "Other"]
+        live_language_label = st.selectbox(
+            "Spoken language",
+            _LANG_OPTS,
+            index=0,
+            key="live_language",
+            help="Auto lets Whisper detect the language. "
+                 "Choose Other to enter any BCP-47 code.",
+        )
+        live_language_code: Optional[str] = None
+        if live_language_label == "English":
+            live_language_code = "en"
+        elif live_language_label == "Spanish":
+            live_language_code = "es"
+        elif live_language_label == "Other":
+            _custom = st.text_input(
+                "Language code (e.g. fr, zh, de, ja, ko, ar …)",
+                max_chars=10,
+                placeholder="fr",
+                key="live_language_custom",
+            ).strip().lower()
+            live_language_code = _custom if _custom else None
 
-        # Language info row
-        _det = live_result.get("detected_language", "unknown")
-        _sel = live_result.get("selected_language")
-        if _sel is None:
-            st.caption(f"Language detected by Whisper: **{_det}**")
-        else:
-            st.caption(f"Language: selected **{_sel}** | Whisper reported **{_det}**")
+        live_reference = st.text_area(
+            "Reference transcript",
+            height=100,
+            placeholder="Enter the expected transcript here to compute WER.",
+            key="live_reference",
+        )
 
-        if live_result.get("lang_mismatch"):
+        # Warn if user typed language tags in the reference
+        _ref_has_tags = bool(_LANG_TAG_RE.search(live_reference))
+        if _ref_has_tags:
             st.warning(
-                f"Language mismatch: you selected **{_sel}** but Whisper detected **{_det}**. "
-                "The transcript may be less accurate."
+                "Language tags detected in the reference (e.g. `[en]`, `[es]`). "
+                "Switch to **Code-Switch Challenge Mode** for tagged references. "
+                "In Monolingual Mode, tags will be stripped before WER computation.",
+                icon="⚠️",
             )
 
-        if live_result["metrics"] is not None:
-            metrics = live_result["metrics"]
-            m1, m2, m3 = st.columns(3)
-            if metrics.get("wer") is not None:
-                m1.metric("WER", f"{metrics['wer']:.1%}")
-            if metrics.get("mer") is not None:
-                m2.metric("MER", f"{metrics['mer']:.1%}")
-            m3.metric("Ref Words", str(metrics.get("ref_words", 0)))
+        if st.button("Run ASR", type="primary", key="live_run_asr"):
+            if not live_audio_bytes:
+                st.error("No recording found. Record a clip before running ASR.")
+            elif len(live_audio_bytes) <= 44:
+                st.error("Recorded audio appears empty. Please try recording again.")
+            else:
+                try:
+                    _lbl = live_language_code or "auto"
+                    with st.spinner(f"Running Whisper base on CPU (language: {_lbl})…"):
+                        live_hypothesis, live_detected = _transcribe_live_audio(
+                            live_audio_bytes,
+                            language=live_language_code,
+                            model_size="base",
+                        )
+                    wer_lang = (
+                        live_detected if live_detected not in ("unknown", None)
+                        else "en"
+                    )
+                    # Strip tags from reference before WER
+                    ref_for_wer = _strip_lang_tags(live_reference) if _ref_has_tags else live_reference
+                    live_metrics = (
+                        _live_entry_metrics(ref_for_wer, live_hypothesis, wer_lang)
+                        if ref_for_wer.strip() else None
+                    )
+                    lang_mismatch = (
+                        live_language_code is not None
+                        and live_detected not in ("unknown", None)
+                        and live_detected != live_language_code
+                    )
+                    st.session_state["live_asr_result"] = {
+                        "selected_language": live_language_code,
+                        "detected_language": live_detected,
+                        "lang_mismatch":     lang_mismatch,
+                        "reference":         live_reference,
+                        "ref_for_wer":       ref_for_wer,
+                        "had_tags":          _ref_has_tags,
+                        "hypothesis":        live_hypothesis,
+                        "duration":          live_duration,
+                        "metrics":           live_metrics,
+                    }
+                    # Clear any stale CS results so switching modes is clean
+                    st.session_state.pop("cs_asr_results", None)
+                except Exception as exc:
+                    st.error(f"ASR failed: {exc}")
+
+        live_result = st.session_state.get("live_asr_result")
+        if live_result:
+            st.divider()
+            st.markdown("#### Result")
+            st.caption("Model: `Whisper base` on `CPU`")
+
+            _det = live_result.get("detected_language", "unknown")
+            _sel = live_result.get("selected_language")
+            if _sel is None:
+                st.caption(f"Whisper detected language: **{_det}**")
+            else:
+                st.caption(
+                    f"Language: selected **{_sel}** | Whisper detected **{_det}**"
+                )
+            if live_result.get("lang_mismatch"):
+                st.warning(
+                    f"Language mismatch: you selected **{_sel}** but Whisper "
+                    f"detected **{_det}**. The transcript may be less accurate."
+                )
+
+            if live_result.get("had_tags"):
+                st.caption(
+                    f"Evaluation reference (tags stripped): "
+                    f"`{live_result.get('ref_for_wer', '')}`"
+                )
+
+            if live_result["metrics"] is not None:
+                metrics = live_result["metrics"]
+                m1, m2, m3 = st.columns(3)
+                if metrics.get("wer") is not None:
+                    m1.metric("WER", f"{metrics['wer']:.1%}")
+                if metrics.get("mer") is not None:
+                    m2.metric("MER", f"{metrics['mer']:.1%}")
+                m3.metric("Ref Words", str(metrics.get("ref_words", 0)))
+                st.caption(
+                    f"Substitutions: **{metrics.get('substitutions', 0)}** | "
+                    f"Deletions: **{metrics.get('deletions', 0)}** | "
+                    f"Insertions: **{metrics.get('insertions', 0)}**"
+                )
+                st.caption(
+                    "WER is meaningful only when the reference language "
+                    "matches the spoken language."
+                )
+            else:
+                st.info(
+                    "Enter a reference transcript above to compute WER."
+                )
+
+            st.markdown("**Hypothesis**")
+            st.write(live_result["hypothesis"] or "—")
+            st.markdown("**Reference**")
+            st.write(live_result["reference"] or "—")
+
+    # ═══════════════════════════════════════════════════════════════════════
+    # CODE-SWITCH CHALLENGE MODE
+    # ═══════════════════════════════════════════════════════════════════════
+    else:
+        st.caption(
+            "Enter a mixed-language reference using `[lang]` tags. "
+            "Four Whisper decoding strategies are compared. "
+            "Tags are stripped before WER/MER computation — they are never "
+            "counted as reference words."
+        )
+        st.info(
+            "💡 Auto-global language detection is **not** the same as "
+            "segment-level language identification. Mixed-language speech may "
+            "require segment-level routing for accurate transcription.",
+            icon="ℹ️",
+        )
+
+        # ── Preset picker ────────────────────────────────────────────────
+        preset_labels = ["(type your own)"] + [p["label"] for p in _CS_PRESETS]
+        preset_choice = st.selectbox(
+            "Example sentences",
+            preset_labels,
+            key="cs_preset_choice",
+        )
+
+        # Sync preset text into the text-area via session state
+        if preset_choice != "(type your own)":
+            preset_text = next(
+                p["text"] for p in _CS_PRESETS if p["label"] == preset_choice
+            )
+            if st.session_state.get("_cs_last_preset") != preset_choice:
+                st.session_state["cs_reference"] = preset_text
+                st.session_state["_cs_last_preset"] = preset_choice
+
+        cs_reference = st.text_area(
+            "Tagged reference  (use `[en]`, `[es]`, `[zh]`, … to mark language)",
+            height=80,
+            placeholder="[en] I need to finish [es] mi tarea [en] before midnight",
+            key="cs_reference",
+        )
+
+        # ── Parse & preview segments ─────────────────────────────────────
+        cs_segments = _parse_tagged_ref(cs_reference) if cs_reference.strip() else []
+        cs_ref_clean = _strip_lang_tags(cs_reference)
+        cs_has_cjk   = _has_cjk(cs_ref_clean)
+        cs_dominant  = _dominant_lang_code(cs_segments)
+
+        if cs_segments and len(cs_segments) > 0:
+            import pandas as pd
+            seg_df = pd.DataFrame([
+                {"#": i, "language": s["lang"], "text": s["text"]}
+                for i, s in enumerate(cs_segments)
+            ])
+            with st.expander("Parsed segments", expanded=True):
+                st.dataframe(seg_df, use_container_width=True, hide_index=True)
+                st.caption(
+                    f"Evaluation reference (tags stripped): "
+                    f"`{cs_ref_clean}`  |  "
+                    f"Dominant language: **{cs_dominant or 'unknown'}**"
+                )
+                if cs_has_cjk:
+                    st.caption(
+                        "CJK characters detected — CER will be shown alongside WER."
+                    )
+
+        # ── Decoding strategies ──────────────────────────────────────────
+        _CS_STRATEGIES = [
+            ("Auto-global",       None),
+            ("Forced-English",    "en"),
+            ("Forced-Spanish",    "es"),
+            ("Dominant-language", cs_dominant),   # may be None → auto
+        ]
+
+        if st.button("Run All Strategies", type="primary", key="cs_run"):
+            if not live_audio_bytes:
+                st.error("No recording found. Record a clip before running.")
+            elif len(live_audio_bytes) <= 44:
+                st.error("Recorded audio appears empty. Please try again.")
+            elif not cs_reference.strip():
+                st.error("Enter a tagged reference before running.")
+            else:
+                results: List[dict] = []
+                for strat_name, lang_code in _CS_STRATEGIES:
+                    _lbl = lang_code or "auto"
+                    with st.spinner(
+                        f"Running Whisper base · strategy: {strat_name} "
+                        f"(language={_lbl})…"
+                    ):
+                        try:
+                            hyp, detected = _transcribe_live_audio(
+                                live_audio_bytes,
+                                language=lang_code,
+                                model_size="base",
+                            )
+                            # Metrics: WER/MER against tag-stripped reference
+                            wer_lang = detected if detected not in ("unknown", None) else "en"
+                            metrics  = _live_entry_metrics(cs_ref_clean, hyp, wer_lang)
+                            cer_val  = _compute_cer(cs_ref_clean, hyp) if cs_has_cjk else None
+                            results.append({
+                                "strategy":        strat_name,
+                                "forced_lang":     _lbl,
+                                "detected":        detected or "?",
+                                "hypothesis":      hyp,
+                                "wer":             metrics.get("wer"),
+                                "mer":             metrics.get("mer"),
+                                "cer":             cer_val,
+                                "substitutions":   metrics.get("substitutions", 0),
+                                "deletions":       metrics.get("deletions",     0),
+                                "insertions":      metrics.get("insertions",    0),
+                                "ref_words":       metrics.get("ref_words",     0),
+                            })
+                        except Exception as exc:
+                            results.append({
+                                "strategy":    strat_name,
+                                "forced_lang": _lbl,
+                                "detected":    "error",
+                                "hypothesis":  f"ERROR: {exc}",
+                                "wer": None, "mer": None, "cer": None,
+                                "substitutions": 0, "deletions": 0,
+                                "insertions": 0, "ref_words": 0,
+                            })
+                st.session_state["cs_asr_results"] = {
+                    "rows":       results,
+                    "ref_raw":    cs_reference,
+                    "ref_clean":  cs_ref_clean,
+                    "has_cjk":    cs_has_cjk,
+                    "dominant":   cs_dominant,
+                    "segments":   cs_segments,
+                }
+                st.session_state.pop("live_asr_result", None)
+
+        # ── Display results ──────────────────────────────────────────────
+        cs_result = st.session_state.get("cs_asr_results")
+        if cs_result:
+            import pandas as pd
+
+            st.divider()
+            st.markdown("#### Results — four decoding strategies")
             st.caption(
-                f"Substitutions: **{metrics.get('substitutions', 0)}** | "
-                f"Deletions: **{metrics.get('deletions', 0)}** | "
-                f"Insertions: **{metrics.get('insertions', 0)}**"
+                f"Reference (raw): `{cs_result['ref_raw']}`  \n"
+                f"Reference (eval, tags stripped): `{cs_result['ref_clean']}`"
             )
-            st.caption(
-                "Note: WER is meaningful only if the reference language matches the spoken language."
+
+            rows = cs_result["rows"]
+            has_cjk = cs_result["has_cjk"]
+
+            # Comparison table
+            tbl_rows = []
+            for r in rows:
+                row: dict = {
+                    "strategy":    r["strategy"],
+                    "detected":    r["detected"],
+                    "WER":         r["wer"],
+                    "MER":         r["mer"],
+                    "sub":         r["substitutions"],
+                    "del":         r["deletions"],
+                    "ins":         r["insertions"],
+                }
+                if has_cjk:
+                    row["CER"] = r["cer"]
+                tbl_rows.append(row)
+
+            tbl_df = pd.DataFrame(tbl_rows)
+            fmt: dict = {}
+            for col in ("WER", "MER", "CER"):
+                if col in tbl_df.columns:
+                    fmt[col] = lambda v: f"{v:.1%}" if v is not None else "—"
+            st.dataframe(
+                tbl_df.style.format(fmt),
+                use_container_width=True,
+                hide_index=True,
             )
-        else:
-            st.info("Enter a reference transcript to compute WER for the recorded clip.")
 
-        st.markdown("**Hypothesis**")
-        st.write(live_result["hypothesis"] or "—")
+            if has_cjk:
+                st.caption(
+                    "CER (Character Error Rate) is shown for CJK content because "
+                    "word-level WER is not meaningful without word segmentation."
+                )
 
-        st.markdown("**Reference**")
-        st.write(live_result["reference"] or "—")
+            # Per-strategy detail expanders
+            st.markdown("#### Per-strategy hypotheses")
+            for r in rows:
+                _icon = "✅" if (r["wer"] is not None and r["wer"] < 0.2) else "⚠️"
+                _wer_str = f"{r['wer']:.1%}" if r["wer"] is not None else "n/a"
+                with st.expander(
+                    f"{_icon} {r['strategy']} — WER {_wer_str} "
+                    f"(detected: {r['detected']})",
+                    expanded=False,
+                ):
+                    st.markdown(f"**Hypothesis:** {r['hypothesis'] or '—'}")
+                    if r["wer"] is not None:
+                        c1, c2, c3 = st.columns(3)
+                        c1.metric("WER",  f"{r['wer']:.1%}")
+                        c2.metric("MER",  f"{r['mer']:.1%}")
+                        if has_cjk and r.get("cer") is not None:
+                            c3.metric("CER", f"{r['cer']:.1%}")
+                        else:
+                            c3.metric("Ref Words", str(r["ref_words"]))
+                        st.caption(
+                            f"sub={r['substitutions']}  "
+                            f"del={r['deletions']}  "
+                            f"ins={r['insertions']}"
+                        )
