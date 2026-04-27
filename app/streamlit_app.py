@@ -281,6 +281,20 @@ def _load_summary(path: str) -> Optional[dict]:
 
 
 @st.cache_data(show_spinner=False)
+def _summary_from_jsonl(jsonl_path: str) -> Optional[dict]:
+    """Compute a summary dict from a results JSONL when no *_summary.json exists.
+
+    Uses ``evaluate_results`` from src.asr.evaluate — same logic as the eval
+    scripts, so WER/MER numbers are consistent.  Returns None on any error.
+    """
+    try:
+        from src.asr.evaluate import evaluate_results
+        return evaluate_results(results_path=jsonl_path, output_path=None)
+    except Exception:
+        return None
+
+
+@st.cache_data(show_spinner=False)
 def _audio_duration(audio_path: str) -> float:
     """Return duration in seconds; falls back to 5.0 on error."""
     try:
@@ -928,16 +942,41 @@ with tab_cmp:
 with tab_wer:
     import pandas as pd
 
-    st.subheader("WER / MER summary — all 50 entries")
+    # ── helpers (defined inside tab to keep scope clean) ─────────────────────
+    def _load_summary_for_jsonl(
+        jsonl_name: str,
+        jsonl_path: Optional[str],
+    ) -> tuple[Optional[dict], str]:
+        """Return (summary_dict, source_label).
 
-    def _build_summary_df(jsonl_name: str, label: str) -> Optional[pd.DataFrame]:
-        if not jsonl_name or jsonl_name == "(none)":
-            return None
+        Search order:
+          1. DEMO_RESULTS / {stem}_summary.json
+          2. RESULTS_DIR  / {stem}_summary.json
+          3. Compute on-the-fly from the JSONL (fallback)
+        """
+        if not jsonl_name or jsonl_name == "(none)" or not jsonl_path:
+            return None, "none"
         stem = Path(jsonl_name).stem
-        summary = _load_summary(str(RESULTS_DIR / f"{stem}_summary.json"))
-        if not summary:
-            st.warning(f"No summary JSON found for {jsonl_name}")
-            return None
+        for results_dir in [DEMO_RESULTS, RESULTS_DIR]:
+            candidate = results_dir / f"{stem}_summary.json"
+            s = _load_summary(str(candidate))
+            if s:
+                return s, "summary_json"
+        # Fallback: compute from JSONL
+        s = _summary_from_jsonl(jsonl_path)
+        if s:
+            return s, "computed_from_jsonl"
+        return None, "error"
+
+    def _build_summary_df(
+        jsonl_name: str,
+        jsonl_path: Optional[str],
+        label: str,
+    ) -> tuple[Optional[pd.DataFrame], str]:
+        """Return (DataFrame, source_label)."""
+        summary, source = _load_summary_for_jsonl(jsonl_name, jsonl_path)
+        if summary is None:
+            return None, source
         rows = []
         for pe in summary.get("per_entry", []):
             rows.append({
@@ -949,23 +988,118 @@ with tab_wer:
                 "del":     pe.get("deletions",     0),
                 "sub":     pe.get("substitutions", 0),
             })
-        return pd.DataFrame(rows)
+        return pd.DataFrame(rows) if rows else None, source
 
-    df_w  = _build_summary_df(whisper_name,  "Whisper")
-    df_wx = _build_summary_df(whisperx_name, "WhisperX")
+    # ── load both summaries ───────────────────────────────────────────────────
+    df_w,  src_w  = _build_summary_df(whisper_name,  whisper_path,  "Whisper")
+    df_wx, src_wx = _build_summary_df(whisperx_name, whisperx_path, "WhisperX")
+
+    # ── dynamic title ─────────────────────────────────────────────────────────
+    n_wer_entries = 0
+    if df_w  is not None: n_wer_entries = max(n_wer_entries, len(df_w))
+    if df_wx is not None: n_wer_entries = max(n_wer_entries, len(df_wx))
+    demo_label = "clean demo" if _USING_CLEAN_DEMO else "entries"
+    wer_title  = (
+        f"WER / MER summary — {n_wer_entries} {demo_label}"
+        if n_wer_entries else "WER / MER summary"
+    )
+    st.subheader(wer_title)
+
+    # ── source notes ──────────────────────────────────────────────────────────
+    for src, lbl in [(src_w, whisper_name), (src_wx, whisperx_name)]:
+        if src == "computed_from_jsonl":
+            st.caption(
+                f"ℹ️ Summary for **{lbl}** computed from JSONL "
+                "(no `*_summary.json` file found)."
+            )
+        elif src == "error":
+            st.warning(f"Could not load or compute summary for **{lbl}**.", icon="⚠️")
 
     frames = [df for df in [df_w, df_wx] if df is not None]
     if not frames:
-        st.info("Select at least one JSONL in the sidebar to see WER statistics.")
+        if whisper_name == "(none)" and whisperx_name == "(none)":
+            st.info("Select at least one JSONL in the sidebar to see WER statistics.")
+        else:
+            st.warning(
+                "Could not load summary data for the selected JSONL files. "
+                "Check that the files are readable and contain `reference`/`hypothesis` fields.",
+                icon="⚠️",
+            )
     else:
         combined = pd.concat(frames, ignore_index=True)
 
-        # ── overall scorecard ─────────────────────────────────────────────────
-        st.markdown("#### Overall (mean across all entries)")
-        overall_cols = st.columns(len(frames) * 2)
-        for k, (lbl, grp) in enumerate(combined.groupby("backend", sort=False)):
-            overall_cols[k * 2    ].metric(f"{lbl} — WER", f"{grp['WER'].mean():.1%}")
-            overall_cols[k * 2 + 1].metric(f"{lbl} — MER", f"{grp['MER'].mean():.1%}")
+        # ── backend comparison table ──────────────────────────────────────────
+        if df_w is not None and df_wx is not None:
+            st.markdown("#### Backend comparison")
+            summary_w,  _ = _load_summary_for_jsonl(whisper_name,  whisper_path)
+            summary_wx, _ = _load_summary_for_jsonl(whisperx_name, whisperx_path)
+            cmp_rows = []
+            for lbl, smry, src in [
+                ("Whisper",  summary_w,  src_w),
+                ("WhisperX", summary_wx, src_wx),
+            ]:
+                if smry is None:
+                    continue
+                ov = smry.get("overall", {})
+                # aggregate sub/del/ins from per_entry
+                total_sub = total_del = total_ins = 0
+                for pe in smry.get("per_entry", []):
+                    total_sub += pe.get("substitutions", 0) or 0
+                    total_del += pe.get("deletions",     0) or 0
+                    total_ins += pe.get("insertions",    0) or 0
+                cmp_rows.append({
+                    "backend":      lbl,
+                    "n":            ov.get("n_utterances", 0),
+                    "WER":          ov.get("wer"),
+                    "MER":          ov.get("mer"),
+                    "substitutions": total_sub,
+                    "deletions":    total_del,
+                    "insertions":   total_ins,
+                    "source":       src,
+                })
+            if cmp_rows:
+                cmp_df = pd.DataFrame(cmp_rows)
+                st.dataframe(
+                    cmp_df.style.format({
+                        "WER": lambda v: f"{v:.1%}" if v is not None else "—",
+                        "MER": lambda v: f"{v:.1%}" if v is not None else "—",
+                    }),
+                    use_container_width=True,
+                    hide_index=True,
+                )
+
+        # ── overall scorecard with Δ WER ──────────────────────────────────────
+        st.divider()
+        st.markdown("#### Overall metrics")
+        summary_w_ov  = (df_w ["WER"].mean() if df_w  is not None else None)
+        summary_wx_ov = (df_wx["WER"].mean() if df_wx is not None else None)
+        summary_w_mo  = (df_w ["MER"].mean() if df_w  is not None else None)
+        summary_wx_mo = (df_wx["MER"].mean() if df_wx is not None else None)
+
+        n_metric_cols = sum([
+            df_w  is not None,
+            df_wx is not None,
+            df_w  is not None and df_wx is not None,  # Δ WER col
+            df_w  is not None and df_wx is not None,  # status col
+        ])
+        ov_cols = st.columns(max(n_metric_cols, 1))
+        col_idx = 0
+        if summary_w_ov is not None:
+            ov_cols[col_idx].metric("Whisper WER",  f"{summary_w_ov:.1%}")
+            col_idx += 1
+        if summary_wx_ov is not None:
+            ov_cols[col_idx].metric("WhisperX WER", f"{summary_wx_ov:.1%}")
+            col_idx += 1
+        if summary_w_ov is not None and summary_wx_ov is not None:
+            delta = summary_wx_ov - summary_w_ov
+            ov_cols[col_idx].metric("Δ WER (X − W)", f"{delta:+.1%}", delta_color="inverse")
+            col_idx += 1
+            if delta < -0.005:
+                ov_cols[col_idx].markdown("✅ WhisperX **better**")
+            elif delta > 0.005:
+                ov_cols[col_idx].markdown("⚠️ Whisper **better**")
+            else:
+                ov_cols[col_idx].markdown("≈ **Tie**")
 
         st.divider()
 
@@ -979,11 +1113,9 @@ with tab_wer:
             if "Whisper" in pivot.columns and "WhisperX" in pivot.columns:
                 pivot["Δ WER"] = pivot["WhisperX"] - pivot["Whisper"]
                 pivot = pivot.sort_values("Δ WER")
-                fmt = {"WER": "{:.1%}", "MER": "{:.1%}"}
-                if "Whisper" in pivot.columns:
-                    fmt["Whisper"]  = "{:.1%}"
-                if "WhisperX" in pivot.columns:
-                    fmt["WhisperX"] = "{:.1%}"
+                fmt = {}
+                if "Whisper"  in pivot.columns: fmt["Whisper"]  = "{:.1%}"
+                if "WhisperX" in pivot.columns: fmt["WhisperX"] = "{:.1%}"
                 fmt["Δ WER"] = "{:+.1%}"
 
                 def _color_delta(v):
@@ -996,7 +1128,7 @@ with tab_wer:
                 st.dataframe(
                     _map_fn(_color_delta, subset=["Δ WER"]),
                     use_container_width=True,
-                    height=400,
+                    height=min(400, 40 + len(pivot) * 35),
                 )
             else:
                 st.dataframe(pivot, use_container_width=True)
@@ -1005,7 +1137,7 @@ with tab_wer:
             st.dataframe(
                 tbl.style.format({"WER": "{:.1%}", "MER": "{:.1%}"}),
                 use_container_width=True,
-                height=400,
+                height=min(400, 40 + len(tbl) * 35),
             )
 
         st.divider()
@@ -1023,7 +1155,7 @@ with tab_wer:
             width = 0.35
             colors = ["#4a90d9", "#27ae60"]
 
-            fig, ax = plt.subplots(figsize=(max(12, n_entries * 0.35), 4))
+            fig, ax = plt.subplots(figsize=(max(8, n_entries * 0.6), 4))
 
             for k, (backend, grp) in enumerate(combined.groupby("backend", sort=False)):
                 id_to_wer = dict(zip(grp["id"], grp["WER"]))
@@ -1033,9 +1165,10 @@ with tab_wer:
                        label=backend, color=colors[k % len(colors)], alpha=0.85)
 
             ax.set_xticks(x)
-            ax.set_xticklabels(all_ids, rotation=75, ha="right", fontsize=6)
+            ax.set_xticklabels(all_ids, rotation=75, ha="right", fontsize=7)
             ax.set_ylabel("WER")
-            ax.set_title("Per-entry WER — Whisper vs WhisperX (large-v3, CPU, oracle segments)")
+            model_tag = "large-v3, CPU, oracle segments"
+            ax.set_title(f"Per-entry WER — Whisper vs WhisperX ({model_tag})")
             ax.legend()
             ax.yaxis.set_major_formatter(
                 plt.FuncFormatter(lambda y, _: f"{y:.0%}")

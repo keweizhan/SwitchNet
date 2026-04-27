@@ -1,0 +1,170 @@
+{
+  "overall": {
+    "wer": 0.0278,
+    "mer": 0.0278,
+    "n_utterances": 10
+  },
+  "per_language": {
+    "bilingual": {
+      "wer": 0.0278,
+      "mer": 0.0278,
+      "n": 10
+    }
+  },
+  "per_entry": [
+    {
+      "wer": 0.05,
+      "mer": 0.05,
+      "substitutions": 2,
+      "deletions": 0,
+      "insertions": 0,
+      "ref_words": 40,
+      "hyp_words": 40,
+      "id": "bilingual_es-en_0000_mls_es_8585_7405_000009_ls_4970-29093-0015",
+      "language": "bilingual"
+    },
+    {
+      "wer": 0.0114,
+      "mer": 0.0114,
+      "substitutions": 1,
+      "deletions": 0,
+      "insertions": 0,
+      "ref_words": 88,
+      "hyp_words": 88,
+      "id": "bilingual_es-en_0001_mls_es_12525_11991_000074_ls_5639-40744-0030",
+      "language": "bilingual"
+    },
+    {
+      "wer": 0.0233,
+      "mer": 0.0233,
+      "substitutions": 1,
+      "deletions": 0,
+      "insertions": 0,
+      "ref_words": 43,
+      "hyp_words": 43,
+      "id": "bilingual_es-en_0002_mls_es_3468_1378_000074_ls_8555-292519-0011",
+      "language": "bilingual"
+    },
+    {
+      "wer": 0.0189,
+      "mer": 0.0189,
+      "substitutions": 1,
+      "deletions": 0,
+      "insertions": 0,
+      "ref_words": 53,
+      "hyp_words": 53,
+      "id": "bilingual_es-en_0003_mls_es_97_567_000075_ls_121-127105-0034",
+      "language": "bilingual"
+    },
+    {
+      "wer": 0.1081,
+      "mer": 0.1081,
+      "substitutions": 8,
+      "deletions": 0,
+      "insertions": 0,
+      "ref_words": 74,
+      "hyp_words": 74,
+      "id": "bilingual_es-en_0004_mls_es_10667_9310_000008_ls_8555-284447-0010",
+      "language": "bilingual"
+    },
+    {
+      "wer": 0.0268,
+      "mer": 0.0265,
+      "substitutions": 1,
+      "deletions": 1,
+      "insertions": 1,
+      "ref_words": 112,
+      "hyp_words": 112,
+      "id": "bilingual_es-en_0005_mls_es_11168_11991_000043_ls_3570-5695-0012",
+      "language": "bilingual"
+    },
+    {
+      "wer": 0.0,
+      "mer": 0.0,
+      "substitutions": 0,
+      "deletions": 0,
+      "insertions": 0,
+      "ref_words": 29,
+      "hyp_words": 29,
+      "id": "bilingual_es-en_0006_mls_es_7510_9951_000064_ls_2830-3980-0040",
+      "language": "bilingual"
+    },
+    {
+      "wer": 0.0,
+      "mer": 0.0,
+      "substitutions": 0,
+      "deletions": 0,
+      "insertions": 0,
+      "ref_words": 47,
+      "hyp_words": 47,
+      "id": "bilingual_es-en_0007_mls_es_3471_1378_000067_ls_6930-81414-0003",
+      "language": "bilingual"
+    },
+    {
+      "wer": 0.0125,
+      "mer": 0.0125,
+      "substitutions": 1,
+      "deletions": 0,
+      "insertions": 0,
+      "ref_words": 80,
+      "hyp_words": 80,
+      "id": "bilingual_es-en_0008_mls_es_3503_2162_000120_ls_5105-28240-0006",
+      "language": "bilingual"
+    },
+    {
+      "wer": 0.0,
+      "mer": 0.0,
+      "substitutions": 0,
+      "deletions": 0,
+      "insertions": 0,
+      "ref_words": 45,
+      "hyp_words": 45,
+      "id": "bilingual_es-en_0009_mls_es_5870_4006_000007_ls_4970-29095-0034",
+      "language": "bilingual"
+    }
+  ],
+  "per_segment_language": {
+    "es": {
+      "wer": 0.0358,
+      "mer": 0.0357,
+      "n": 10
+    },
+    "en": {
+      "wer": 0.0161,
+      "mer": 0.0161,
+      "n": 10
+    }
+  },
+  "per_position": {
+    "position_0": {
+      "wer": 0.0358,
+      "mer": 0.0357,
+      "n": 10
+    },
+    "position_1": {
+      "wer": 0.0161,
+      "mer": 0.0161,
+      "n": 10
+    }
+  },
+  "per_language_position": {
+    "es_pos0": {
+      "wer": 0.0358,
+      "mer": 0.0357,
+      "n": 10
+    },
+    "en_pos1": {
+      "wer": 0.0161,
+      "mer": 0.0161,
+      "n": 10
+    }
+  },
+  "switch_point": {
+    "wer": 0.03,
+    "mer": 0.0297,
+    "window_words": 5,
+    "n_windows": 10
+  },
+  "source": "summary_generated_from_jsonl",
+  "backend": "whisperx"
+}

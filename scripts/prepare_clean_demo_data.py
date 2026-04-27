@@ -30,6 +30,7 @@ import json
 import os
 import sys
 from pathlib import Path
+from typing import Optional
 
 # ---------------------------------------------------------------------------
 # Repo root on sys.path
@@ -132,6 +133,32 @@ def _all_audio_present(entry: dict) -> tuple[bool, list[str]]:
         if resolve_audio_path(ap) is None:
             missing.append(ap)
     return (len(missing) == 0), missing
+
+
+# ---------------------------------------------------------------------------
+# Summary computation
+# ---------------------------------------------------------------------------
+
+def _compute_summary_from_jsonl(
+    jsonl_path: Path,
+    manifest_path: Optional[Path] = None,
+) -> dict:
+    """Compute a *_summary.json-compatible dict from a results JSONL file.
+
+    Delegates entirely to ``evaluate_results`` from ``src.asr.evaluate``,
+    which computes corpus WER/MER, per-entry metrics, per-language breakdowns,
+    and switch-point WER (when a manifest is provided).
+
+    The returned dict has the same shape as files written by ``run_eval.py``:
+    ``overall``, ``per_language``, ``per_entry``, ``switch_point``, …
+    """
+    from src.asr.evaluate import evaluate_results
+
+    return evaluate_results(
+        results_path=jsonl_path,
+        manifest_path=manifest_path,
+        output_path=None,   # we write it ourselves with ensure_ascii=False
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -238,6 +265,20 @@ def main() -> None:
     _write_jsonl(out_manifest, kept)
     _write_jsonl(out_whisper,  [whisper_idx[e["id"]] for e in kept])
     _write_jsonl(out_whisperx, [whisperx_idx[e["id"]] for e in kept])
+
+    # Generate summary JSON files
+    print()
+    for out_jsonl, label in [(out_whisper, "Whisper"), (out_whisperx, "WhisperX")]:
+        out_summary = out_jsonl.with_name(out_jsonl.stem + "_summary.json")
+        summary = _compute_summary_from_jsonl(out_jsonl, manifest_path=out_manifest)
+        summary["source"] = "summary_generated_from_jsonl"
+        summary["backend"] = label.lower()
+        with open(out_summary, "w", encoding="utf-8") as f:
+            json.dump(summary, f, ensure_ascii=False, indent=2)
+        n = summary["overall"]["n_utterances"]
+        w = summary["overall"]["wer"]
+        m = summary["overall"]["mer"]
+        print(f"Summary: {out_summary}  (n={n}, WER={w:.4f}, MER={m:.4f})")
 
     print("\nDone.")
 
