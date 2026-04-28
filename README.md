@@ -178,7 +178,13 @@ Two ASR demo modes:
 - If the reference contains `[lang]` tags (e.g. `[en] hello [es] mundo`), a warning is shown and tags are **stripped before WER computation** so they are never counted as reference words
 
 #### Code-Switch Challenge Mode
-- Preset mixed-language examples or free-form `[lang]`-tagged reference
+- Preset mixed-language examples or free-form `[lang]`-tagged reference:
+  - EN/ES — homework deadline
+  - ES/EN — start the experiment
+  - EN/ES — explain WER vs MER
+  - EN/ES/ZH — mixed three languages
+  - ZH/EN — finish the experiment (`今天下午 … 然后整理结果`)
+  - ZH/EN — code-switching is hard (`这个例子展示了 … 因为模型需要识别语言切换`)
 - Tags supported: `[en]`, `[es]`, `[zh]`, and any 2–3 letter BCP-47 code
 - Parsed-segments table shows each language span
 - **Four decoding strategies** compared side by side (all use the same selected model/device — no model reload between strategies):

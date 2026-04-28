@@ -1219,6 +1219,14 @@ _CS_PRESETS: List[dict] = [
         "label": "EN/ES/ZH — mixed three languages",
         "text":  "[en] The model handles English [es] y español [zh] 但是中文需要看 CER",
     },
+    {
+        "label": "ZH/EN — finish the experiment",
+        "text":  "[zh] 今天下午 [en] I need to finish the experiment [zh] 然后整理结果",
+    },
+    {
+        "label": "ZH/EN — code-switching is hard",
+        "text":  "[zh] 这个例子展示了 [en] code-switching ASR is difficult [zh] 因为模型需要识别语言切换",
+    },
 ]
 
 
