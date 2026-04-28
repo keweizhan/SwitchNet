@@ -350,8 +350,22 @@ def _live_transcriber_cached(model_size: str, device: str):
     return Transcriber(model_size=model_size, device=device)
 
 
+def _resolve_device(device_choice: str) -> str:
+    """Resolve 'auto' to 'cuda' or 'cpu' based on torch availability."""
+    if device_choice != "auto":
+        return device_choice
+    try:
+        import torch
+        return "cuda" if torch.cuda.is_available() else "cpu"
+    except Exception:
+        return "cpu"
+
+
 def _transcribe_live_audio(
-    audio_bytes: bytes, language: Optional[str], model_size: str = "base"
+    audio_bytes: bytes,
+    language: Optional[str],
+    model_size: str = "base",
+    device: str = "cpu",
 ) -> tuple:
     """Transcribe recorded audio bytes via Whisper.
 
@@ -363,7 +377,7 @@ def _transcribe_live_audio(
         with tempfile.NamedTemporaryFile(delete=False, suffix=".wav") as tmp:
             tmp.write(audio_bytes)
             temp_path = tmp.name
-        transcriber = _live_transcriber_cached(model_size=model_size, device="cpu")
+        transcriber = _live_transcriber_cached(model_size=model_size, device=device)
         return transcriber._transcribe_file_ex(temp_path, language=language)
     finally:
         if temp_path:
@@ -1289,8 +1303,8 @@ def _normalize_for_wer(text: str, lang: str) -> str:
 with tab_live:
     st.subheader("Live recording ASR demo")
     st.caption(
-        "Record a clip in the browser, run Whisper base on CPU, and evaluate "
-        "against a reference transcript."
+        "Record a clip in the browser, run Whisper (configurable model/device), "
+        "and evaluate against a reference transcript."
     )
 
     # ── Mode selector ────────────────────────────────────────────────────────
@@ -1301,6 +1315,34 @@ with tab_live:
         horizontal=True,
         key="live_mode",
     )
+
+    # ── Model / device selectors ─────────────────────────────────────────────
+    _mc1, _mc2 = st.columns([2, 2])
+    with _mc1:
+        live_model = st.selectbox(
+            "Whisper model",
+            ["base", "small", "medium", "large-v3"],
+            index=0,
+            key="live_model_size",
+            help="Larger models are more accurate but much slower, especially on CPU.",
+        )
+    with _mc2:
+        live_device_choice = st.selectbox(
+            "Device",
+            ["auto", "cpu", "cuda"],
+            index=0,
+            key="live_device_choice",
+            help="'auto' picks CUDA if available, otherwise CPU.",
+        )
+    live_device = _resolve_device(live_device_choice)
+
+    # Warn if a heavy model is selected on CPU
+    if live_model in ("large-v3", "medium") and live_device == "cpu":
+        st.warning(
+            f"**{live_model}** on CPU is very slow (minutes per clip). "
+            "Consider using `base` or `small` for interactive demos.",
+            icon="⏳",
+        )
 
     st.divider()
 
@@ -1382,11 +1424,15 @@ with tab_live:
             else:
                 try:
                     _lbl = live_language_code or "auto"
-                    with st.spinner(f"Running Whisper base on CPU (language: {_lbl})…"):
+                    with st.spinner(
+                        f"Running Whisper {live_model} on {live_device} "
+                        f"(language: {_lbl})…"
+                    ):
                         live_hypothesis, live_detected = _transcribe_live_audio(
                             live_audio_bytes,
                             language=live_language_code,
-                            model_size="base",
+                            model_size=live_model,
+                            device=live_device,
                         )
                     wer_lang = (
                         live_detected if live_detected not in ("unknown", None)
@@ -1413,6 +1459,8 @@ with tab_live:
                         "hypothesis":        live_hypothesis,
                         "duration":          live_duration,
                         "metrics":           live_metrics,
+                        "model_size":        live_model,
+                        "device":            live_device,
                     }
                     # Clear any stale CS results so switching modes is clean
                     st.session_state.pop("cs_asr_results", None)
@@ -1423,7 +1471,9 @@ with tab_live:
         if live_result:
             st.divider()
             st.markdown("#### Result")
-            st.caption("Model: `Whisper base` on `CPU`")
+            _res_model  = live_result.get("model_size", "base")
+            _res_device = live_result.get("device", "cpu")
+            st.caption(f"Model: `Whisper {_res_model}` on `{_res_device.upper()}`")
 
             _det = live_result.get("detected_language", "unknown")
             _sel = live_result.get("selected_language")
@@ -1557,14 +1607,15 @@ with tab_live:
                 for strat_name, lang_code in _CS_STRATEGIES:
                     _lbl = lang_code or "auto"
                     with st.spinner(
-                        f"Running Whisper base · strategy: {strat_name} "
-                        f"(language={_lbl})…"
+                        f"Running Whisper {live_model} ({live_device}) · "
+                        f"strategy: {strat_name} (language={_lbl})…"
                     ):
                         try:
                             hyp, detected = _transcribe_live_audio(
                                 live_audio_bytes,
                                 language=lang_code,
-                                model_size="base",
+                                model_size=live_model,
+                                device=live_device,
                             )
                             # Metrics: WER/MER against tag-stripped reference
                             wer_lang = detected if detected not in ("unknown", None) else "en"
@@ -1600,6 +1651,8 @@ with tab_live:
                     "has_cjk":    cs_has_cjk,
                     "dominant":   cs_dominant,
                     "segments":   cs_segments,
+                    "model_size": live_model,
+                    "device":     live_device,
                 }
                 st.session_state.pop("live_asr_result", None)
 
@@ -1609,8 +1662,11 @@ with tab_live:
             import pandas as pd
 
             st.divider()
+            _cs_model  = cs_result.get("model_size", "base")
+            _cs_device = cs_result.get("device", "cpu")
             st.markdown("#### Results — four decoding strategies")
             st.caption(
+                f"Model: `Whisper {_cs_model}` on `{_cs_device.upper()}`  \n"
                 f"Reference (raw): `{cs_result['ref_raw']}`  \n"
                 f"Reference (eval, tags stripped): `{cs_result['ref_clean']}`"
             )

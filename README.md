@@ -163,7 +163,14 @@ Side-by-side timed subtitle comparison: Reference cues | Whisper | WhisperX. Use
 Per-entry and corpus-level WER / MER table, plus a bar chart comparing Whisper vs WhisperX across all entries in the loaded JSONL.
 
 ### Live Recording tab
-Record a clip in the browser, run Whisper base on CPU, and evaluate against a typed reference transcript. Two modes:
+Record a clip in the browser, transcribe with a configurable Whisper model and device, and evaluate against a typed reference transcript.
+
+#### Model / Device selectors
+- **Whisper model**: `base` (default) / `small` / `medium` / `large-v3`
+- **Device**: `auto` (CUDA if available, else CPU) / `cpu` / `cuda`
+- A warning is shown when `large-v3` or `medium` is selected on CPU — these models take several minutes per clip
+
+Two ASR demo modes:
 
 #### Monolingual Mode
 - **Language selector**: Auto / English / Spanish / Other (any BCP-47 code)
@@ -174,7 +181,7 @@ Record a clip in the browser, run Whisper base on CPU, and evaluate against a ty
 - Preset mixed-language examples or free-form `[lang]`-tagged reference
 - Tags supported: `[en]`, `[es]`, `[zh]`, and any 2–3 letter BCP-47 code
 - Parsed-segments table shows each language span
-- **Four decoding strategies** compared side by side:
+- **Four decoding strategies** compared side by side (all use the same selected model/device — no model reload between strategies):
   | Strategy | Whisper language parameter |
   |---|---|
   | Auto-global | `None` (Whisper detects) |
